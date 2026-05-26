@@ -152,10 +152,6 @@ static void anomaly_check_burst(ktime_t now)
         }
     }
 }
-
-/* =========================================================================
- * Helper: Record a log entry into the circular buffer
- * ========================================================================= */
 static void audit_log_event(enum usb_audit_event_type type,
                             __u32 pid, __u64 size, const char *name)
 {
