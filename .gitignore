@@ -1,32 +1,28 @@
-# Linux Kernel Module (LKM) Build Artifacts
+# Build exclusions
 *.o
 *.ko
-*.mod
 *.mod.c
-*.mod.o
-*.cmd
-*.symvers
+*.mod
 *.order
-*.markers
-.tmp_versions/
-.tmp_*.o
-.*.cmd
-.built-in.a
-.modules.order.cmd
+*.symvers
+modules.order
+Module.symvers
 
-# Python Runtime & Virtual Environments
+# Compiled user-space binary
+src_user/usb_monitor
+
+# Python cache
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
-.Python
-env/
-venv/
-.venv/
 
-# IDEs and OS Noise
-.DS_Store
+# Editor / IDE
 .vscode/
 .idea/
+*.swp
+*~
+
+# Archives
+*.zip
+*.tar.gz
 *.swp
 *.swo
