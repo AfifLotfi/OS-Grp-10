@@ -1,0 +1,32 @@
+# Linux Kernel Module (LKM) Build Artifacts
+*.o
+*.ko
+*.mod
+*.mod.c
+*.mod.o
+*.cmd
+*.symvers
+*.order
+*.markers
+.tmp_versions/
+.tmp_*.o
+.*.cmd
+.built-in.a
+.modules.order.cmd
+
+# Python Runtime & Virtual Environments
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+
+# IDEs and OS Noise
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
