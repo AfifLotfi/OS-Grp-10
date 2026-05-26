@@ -33,6 +33,11 @@ class USBMonitorHandler(FileSystemEventHandler):
     def on_created(self, event):
         if event.is_directory:
             return
+
+        now = time.time()
+        self.modification_history.append(now)
+        self.check_anomaly(now)
+
         print(f"[NEW_FILE] Detect: {event.src_path}")
 
     def on_modified(self, event):

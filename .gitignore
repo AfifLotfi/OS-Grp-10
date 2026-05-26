@@ -24,5 +24,10 @@ __pycache__/
 # Archives
 *.zip
 *.tar.gz
-*.swp
-*.swo
+
+# Report generation
+scripts/generate_report.py
+scripts/*.docx
+
+# Python virtual environment
+.venv_report/

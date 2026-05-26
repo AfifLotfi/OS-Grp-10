@@ -252,7 +252,6 @@ static void interactive_menu(int fd)
 {
     char line[MAX_LINE_LEN];
     char code;
-    char path[256];
 
     printf("\n┌── Interactive Test Menu ───────────────────────────────┐\n");
     printf("│  C <path>  — Report file CREATE event                  │\n");

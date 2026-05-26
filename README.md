@@ -201,7 +201,7 @@ Shows a periodically-refreshing dashboard with:
 
 ---
 
-## Advanced Challenge: Automatic Mass-Copy Anomaly Detection ✅
+## Advanced Challenge: Automatic Mass-Copy Anomaly Detection 
 
 The advanced challenge goal ("Detect suspicious mass-copy behavior and trigger alerts") is **fully implemented** across all three layers:
 

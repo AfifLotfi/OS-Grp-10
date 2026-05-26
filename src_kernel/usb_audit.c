@@ -152,6 +152,10 @@ static void anomaly_check_burst(ktime_t now)
         }
     }
 }
+
+/* =========================================================================
+ * Helper: Record a log entry into the circular buffer
+ * ========================================================================= */
 static void audit_log_event(enum usb_audit_event_type type,
                             __u32 pid, __u64 size, const char *name)
 {
@@ -169,10 +173,12 @@ static void audit_log_event(enum usb_audit_event_type type,
     entry->timestamp_ns  = ktime_get_real_ns();
     entry->file_size     = size;
 
-    if (name)
+    if (name) {
         strncpy(entry->file_name, name, sizeof(entry->file_name) - 1);
-    else
+        entry->file_name[sizeof(entry->file_name) - 1] = '\0';
+    } else {
         entry->file_name[0] = '\0';
+    }
 
     log_head = (log_head + 1) % USB_AUDIT_LOG_MAX;
     if (log_count < USB_AUDIT_LOG_MAX)

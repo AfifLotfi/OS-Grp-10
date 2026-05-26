@@ -253,7 +253,7 @@ This is a normal C program. It uses **ioctl** (I/O Control) to send commands to 
 
 ### `src_user/file_tracker.py` — The Python Watchdog
 
-Uses the `watchdog` Python library to watch the actual USB mount folder on the Raspberry Pi. It detects real file operations and implements its own sliding-window anomaly detection.
+Uses the `watchdog` Python library to watch the actual USB mount folder on the Raspberry Pi. It detects real file operations and implements its own sliding-window anomaly detection. **Both file creation and modification events** feed into the anomaly detector, ensuring comprehensive mass-copy coverage.
 
 ### `scripts/run.sh` — The One-Click Launcher
 
