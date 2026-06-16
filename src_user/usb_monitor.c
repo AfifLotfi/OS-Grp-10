@@ -431,7 +431,7 @@ int main(int argc, char *argv[])
 {
     int  fd;
     int  mode_interactive = 1;   /* 1 = interactive, 0 = daemon            */
-    const char *mount_path = "/media";
+    char mount_path[USB_AUDIT_PATH_LEN] = "/media";
     int  anomaly_thr = ANOMALY_THRESHOLD;
     int  anomaly_win = (int)(ANOMALY_WINDOW_SEC * 1000);
     int  i;
@@ -449,7 +449,8 @@ int main(int argc, char *argv[])
             mode_interactive = 1;
         } else if ((strcmp(argv[i], "-p") == 0 ||
                     strcmp(argv[i], "--path") == 0) && i + 1 < argc) {
-            mount_path = argv[++i];
+            strncpy(mount_path, argv[++i], USB_AUDIT_PATH_LEN - 1);
+            mount_path[USB_AUDIT_PATH_LEN - 1] = '\\0';
         } else if ((strcmp(argv[i], "-t") == 0 ||
                     strcmp(argv[i], "--threshold") == 0) && i + 1 < argc) {
             anomaly_thr = atoi(argv[++i]);

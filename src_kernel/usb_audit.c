@@ -32,8 +32,6 @@
 #include <linux/mutex.h>          /* mutex_lock, mutex_unlock           */
 #include <linux/usb.h>            /* usb_register_notify, usb_device    */
 #include <linux/notifier.h>       /* NOTIFY_DONE, notifier_block        */
-#include <linux/genhd.h>          /* gendisk, block device iteration    */
-#include <linux/blkdev.h>         /* block_device operations            */
 #include <linux/timekeeping.h>    /* ktime_get_real_ns                  */
 #include <linux/string.h>         /* strncpy, strnlen                   */
 #include <linux/ktime.h>          /* ktime_t, ktime_sub, ktime_after    */
@@ -238,10 +236,9 @@ static int usb_audit_notify(struct notifier_block *self,
     switch (action) {
     case USB_DEVICE_ADD:
         printk(KERN_INFO "[usb_audit] USB storage device INSERTED: "
-               "vendor=0x%04x product=0x%04x serial=%s\n",
+               "vendor=0x%04x product=0x%04x\n",
                udev->descriptor.idVendor,
-               udev->descriptor.idProduct,
-               udev->serial ? udev->serial : "N/A");
+               udev->descriptor.idProduct);
 
         audit_log_event(USB_AUDIT_EVENT_DEVICE_IN, 0, 0,
                         udev->product ? udev->product : "USB_Storage");
@@ -392,12 +389,27 @@ static ssize_t usb_audit_write(struct file *filp, const char __user *buf,
             file_path[--len] = '\0';
     }
 
-    printk(KERN_INFO "[usb_audit] Event from PID %d: type=%d path=%s\n",
-           current->pid, type, file_path);
+    /* -- Parse optional file size from "(N bytes)" suffix ------------ */
+    {
+        __u64 parsed_size = 0;
+        char *paren = strrchr(file_path, '(');
+        if (paren) {
+            /* Parse the numeric value inside parentheses. */
+            if (sscanf(paren, "(%llu", &parsed_size) == 1) {
+                /* Remove the size suffix from the path by trimming. */
+                char *trim = paren;
+                while (trim > file_path && *(trim - 1) == ' ')
+                    trim--;
+                *trim = '\0';
+            }
+        }
 
-    /* Record the event.  file_size=0 here; the user app can update
-     * size via a different mechanism if needed.                         */
-    audit_log_event(type, current->pid, 0, file_path);
+        printk(KERN_INFO "[usb_audit] Event from PID %d: type=%d "
+               "path=%s size=%llu\n",
+               current->pid, type, file_path, parsed_size);
+
+        audit_log_event(type, current->pid, parsed_size, file_path);
+    }
 
     return count;
 }
@@ -460,16 +472,21 @@ static long usb_audit_ioctl(struct file *filp, unsigned int cmd,
 
     case USB_AUDIT_GET_LOGS: {
         usb_audit_logs_t __user *ulogs = (usb_audit_logs_t __user *)arg;
-        usb_audit_logs_t         klogs;
+        usb_audit_logs_t         *klogs = NULL;
         __u32                    req_count;
         int                      i, tail;
 
-        if (copy_from_user(&klogs, ulogs, sizeof(__u32) * 2))
+        /* Read just the count field from user-space (first 8 bytes). */
+        if (copy_from_user(&req_count, ulogs, sizeof(__u32)))
             return -EFAULT;
 
-        req_count = klogs.count;
         if (req_count > USB_AUDIT_LOG_MAX)
             req_count = USB_AUDIT_LOG_MAX;
+
+        /* Allocate on heap — structure is ~35 KB, too large for stack. */
+        klogs = kmalloc(sizeof(usb_audit_logs_t), GFP_KERNEL);
+        if (!klogs)
+            return -ENOMEM;
 
         mutex_lock(&audit_mutex);
 
@@ -481,16 +498,21 @@ static long usb_audit_ioctl(struct file *filp, unsigned int cmd,
                % USB_AUDIT_LOG_MAX;
 
         for (i = 0; i < (int)req_count; i++) {
-            klogs.entries[i] = log_buffer[tail];
+            klogs->entries[i] = log_buffer[tail];
             tail = (tail + 1) % USB_AUDIT_LOG_MAX;
         }
 
-        klogs.count = req_count;
+        klogs->count = req_count;
+        klogs->reserved = 0;
         mutex_unlock(&audit_mutex);
 
-        /* Copy the whole structure back (count field is first). */
-        if (copy_to_user(ulogs, &klogs, sizeof(klogs)))
+        /* Copy count + entries back to user-space. */
+        if (copy_to_user(ulogs, klogs,
+                         sizeof(__u32) * 2 +
+                         req_count * sizeof(usb_audit_log_entry_t)))
             ret = -EFAULT;
+
+        kfree(klogs);
         break;
     }
 
