@@ -25,8 +25,7 @@ __pycache__/
 *.zip
 *.tar.gz
 
-# Report generation
-scripts/generate_report.py
+# Report generation (output only — generate_report.py IS a source file)
 scripts/*.docx
 
 # Python virtual environment

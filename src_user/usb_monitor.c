@@ -345,8 +345,20 @@ static void interactive_menu(int fd)
             /* Parse: T <threshold> <window_ms> */
             int thr = 0, win = 0;
             if (sscanf(line + 1, "%d %d", &thr, &win) >= 2) {
+                if (thr < 1) {
+                    printf("  Error: threshold must be at least 1.\n");
+                    break;
+                }
+                if (win < 100) {
+                    printf("  Error: window must be at least 100 ms.\n");
+                    break;
+                }
                 set_anomaly_thresholds(fd, (__u32)thr, (__u32)win);
             } else if (sscanf(line + 1, "%d", &thr) >= 1) {
+                if (thr < 1) {
+                    printf("  Error: threshold must be at least 1.\n");
+                    break;
+                }
                 /* Only threshold given — keep current window. */
                 usb_audit_anomaly_t anom;
                 memset(&anom, 0, sizeof(anom));
@@ -431,7 +443,7 @@ int main(int argc, char *argv[])
 {
     int  fd;
     int  mode_interactive = 1;   /* 1 = interactive, 0 = daemon            */
-    const char *mount_path = "/media";
+    char mount_path[USB_AUDIT_PATH_LEN] = "/media";
     int  anomaly_thr = ANOMALY_THRESHOLD;
     int  anomaly_win = (int)(ANOMALY_WINDOW_SEC * 1000);
     int  i;
@@ -449,7 +461,8 @@ int main(int argc, char *argv[])
             mode_interactive = 1;
         } else if ((strcmp(argv[i], "-p") == 0 ||
                     strcmp(argv[i], "--path") == 0) && i + 1 < argc) {
-            mount_path = argv[++i];
+            strncpy(mount_path, argv[++i], USB_AUDIT_PATH_LEN - 1);
+            mount_path[USB_AUDIT_PATH_LEN - 1] = '\\0';
         } else if ((strcmp(argv[i], "-t") == 0 ||
                     strcmp(argv[i], "--threshold") == 0) && i + 1 < argc) {
             anomaly_thr = atoi(argv[++i]);
