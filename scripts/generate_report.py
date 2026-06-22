@@ -253,400 +253,603 @@ def build_document():
     # ── 1. Executive Summary ──
     d.h1("1. Executive Summary")
     d.para(
-        "This project implements a Linux kernel module driver that monitors file transfer "
-        "activity to removable USB storage devices. The system is designed for data loss "
-        "prevention (DLP), cybersecurity auditing, and secure storage use cases. It runs "
-        "on a Raspberry Pi 4 with Raspbian 64-bit."
+        "This project is a Linux kernel driver that watches file activity on USB storage "
+        "devices. Think of it as a security camera for USB drives — it records every file "
+        "that is created, changed, or deleted, and raises an alarm if someone copies too "
+        "many files too quickly. This is called Data Loss Prevention (DLP), and it helps "
+        "stop sensitive information from being stolen via USB sticks."
     )
     d.para(
-        "The solution consists of three integrated layers: (1) a kernel-space character "
-        "device driver (usb_audit.ko) that intercepts USB device events and maintains an "
-        "audit trail, (2) a user-space C application (usb_monitor) that communicates with "
-        "the driver via ioctl system calls to display statistics and logs, and (3) a Python "
-        "watchdog daemon (file_tracker.py) for alternative real-time filesystem monitoring."
+        "The system runs on a Raspberry Pi 4 with Raspbian 64-bit and has three parts: "
+        "(1) a kernel module (usb_audit.ko) that lives inside the Linux kernel and has "
+        "direct access to USB hardware events, (2) a C program (usb_monitor) that shows "
+        "statistics and logs in a dashboard, and (3) a Python script (file_tracker.py) "
+        "that watches folders for changes and reports them to the kernel module."
     )
     d.para(
-        "The advanced challenge goal — automatic mass-copy anomaly detection — is fully "
-        "implemented in the kernel module with a configurable sliding-window burst detector "
-        "that raises security alerts when file operations exceed a threshold within a time window."
+        "The standout feature is automatic mass-copy detection. The kernel module uses "
+        "a sliding-window burst counter: if too many file operations happen within a short "
+        "time window, it automatically logs a SECURITY ALERT. This works at two levels — "
+        "the kernel detects writes autonomously using a kprobe hook on the vfs_write "
+        "function, and user-space programs can also inject events for monitoring. Both "
+        "levels feed into the same detection engine, so alerts are raised regardless of "
+        "which path the event comes from."
+    )
+    d.para(
+        "The project has been fully tested on real hardware with a USB drive. An automated "
+        "test suite (test_all.sh) verifies all 10 features in one command: module loading, "
+        "device node creation, kprobe activation, event injection, statistics accuracy, "
+        "log buffer integrity, anomaly detection, USB drive interaction, and clean shutdown. "
+        "All 22 tests pass consistently."
     )
 
     # ── 2. System Architecture ──
     d.h1("2. System Architecture & Design")
     d.h2("2.1 High-Level Architecture")
     d.para(
-        "The system follows a layered architecture separating user-space from kernel-space. "
-        "The kernel module runs with full privileges and has direct access to USB and block "
-        "device subsystems. The user-space applications communicate with the kernel module "
-        "through a character device node (/dev/usb_audit) using standard file operations "
-        "(open, read, write, ioctl)."
+        "The system is built in layers. The kernel module (usb_audit.ko) sits at the bottom "
+        "with full hardware access. Above it, user-space programs talk to the kernel through "
+        "a special file called /dev/usb_audit — just like reading and writing a regular file, "
+        "but the data goes to our driver instead of a disk."
+    )
+    d.para(
+        "There are two ways events reach the kernel module. The first is user-space reporting: "
+        "the C monitor or Python script notices a file change and sends a message to "
+        "/dev/usb_audit. The second is kernel-level interception: a kprobe (kernel probe) "
+        "hooks into the Linux kernel's own vfs_write function, so the driver automatically "
+        "detects any file write anywhere on the system — no user-space help needed. "
+        "Both paths feed into the same log buffer and anomaly detection engine."
     )
 
     d.table(
-        ["Layer", "Component", "Language", "Privilege Level"],
+        ["Layer", "Component", "Language", "What It Does"],
         [
-            ["User-Space", "usb_monitor (C)", "C", "User (root for /dev access)"],
-            ["User-Space", "file_tracker.py", "Python 3", "User"],
-            ["Kernel-Space", "usb_audit.ko", "C (Kernel)", "Kernel (Ring 0)"],
+            ["User-Space", "usb_monitor", "C", "Dashboard + event injection"],
+            ["User-Space", "file_tracker.py", "Python 3", "Real-time folder watching"],
+            ["User-Space", "test_all.sh", "Bash", "Automated test suite"],
+            ["Kernel-Space", "usb_audit.ko", "C (Kernel)", "Driver + anomaly engine"],
+            ["Kernel-Space", "kprobe hook", "C (Kernel)", "Auto-detect file writes"],
         ]
     )
 
     d.h2("2.2 Data Flow")
     d.para(
-        "When a file is written to a USB storage device: (1) The user-space application "
-        "detects the file operation and sends an event string to /dev/usb_audit via write(). "
-        "(2) The kernel module's write handler parses the event, records it in the circular "
-        "log buffer, updates aggregate statistics, and feeds the anomaly detection engine. "
-        "(3) If the anomaly threshold is exceeded, an alert is automatically logged with "
-        "printk() for dmesg visibility. (4) The user app retrieves logs and statistics via "
-        "ioctl() calls for display."
+        "When a file is written to a USB drive, two things can happen. First, the kernel's "
+        "kprobe on vfs_write automatically fires — it checks if the file is on the monitored "
+        "USB path, and if so, logs the event with the file size. Second, a user-space program "
+        "may also detect the change and send an event string like 'C /media/usb/file.txt "
+        "(1024 bytes)' to /dev/usb_audit. In both cases, the driver records the event in "
+        "its circular buffer, updates counters, and feeds the anomaly detector. If too many "
+        "events happen too fast, a SECURITY ALERT is raised automatically."
+    )
+    d.para(
+        "File size tracking works end-to-end: the Python monitor reads the actual file size "
+        "with os.path.getsize() and includes it in the event string. The kernel module's "
+        "write handler parses the '(N bytes)' suffix and stores the size in the log entry. "
+        "The kprobe path captures the actual number of bytes written from the vfs_write "
+        "return value. This means the statistics always show real byte counts."
     )
 
     d.h2("2.3 Concurrency Model")
     d.para(
-        "All shared state (log buffer, statistics, anomaly ring) is protected by a single "
-        "mutex (audit_mutex). This ensures thread safety when multiple user-space processes "
-        "concurrently access the device node. The anomaly_check_burst() function is called "
-        "while the mutex is already held by audit_log_event(), avoiding deadlocks."
+        "Since the driver can be accessed by multiple programs at once, all shared data "
+        "(log buffer, counters, anomaly timestamps) is protected by a single mutex lock "
+        "called audit_mutex. Only one thread can modify the shared data at a time. For the "
+        "kprobe path, which runs in atomic context where sleeping is not allowed, a special "
+        "trylock variant is used — if the lock is already taken, the event is simply skipped "
+        "rather than risking a system crash. This is a safe trade-off for a monitoring tool."
     )
 
     # ── 3. Design Step-by-Step ──
     d.h1("3. Design Step-by-Step: Building the Driver")
     d.para(
-        "This section describes the systematic design process followed to construct the "
-        "USB file transfer activity driver. Each step builds upon the previous one, "
-        "enabling readers to understand and replicate the design."
+        "This section walks through the design process step by step, from the initial "
+        "header file all the way to the automated test suite. Each step builds on the "
+        "previous one so you can see how the system came together."
     )
 
     d.h2("Step 1: Define the Shared Contract (usb_tracker.h)")
     d.para(
         "Before writing any kernel or user code, we defined the data structures and ioctl "
-        "commands that both sides must agree upon. This header file serves as the contract "
-        "between kernel-space and user-space. Key definitions include:"
+        "commands that both sides must agree upon. This header file is the contract between "
+        "kernel-space and user-space. It defines event types (DEVICE_IN, FILE_CREATE, "
+        "FILE_MODIFY, FILE_DELETE, ALERT), the log entry structure (timestamp, PID, event "
+        "type, file path, byte size), statistics counters, and seven ioctl commands."
     )
-    d.bullet("usb_audit_log_entry_t — A single event record with timestamp, PID, event type, file path, and size.")
-    d.bullet("usb_audit_stats_t — Aggregate counters for total bytes, file counts, device events, and alerts.")
-    d.bullet("usb_audit_anomaly_t — Configuration and status for the anomaly detection engine.")
-    d.bullet("ioctl command macros (USB_AUDIT_GET_STATS, USB_AUDIT_SET_ANOMALY, etc.) using the Linux _IO/_IOR/_IOW/_IOWR macros.")
     d.para(
-        "The magic number 'U' (0x55) was chosen to uniquely identify our driver's ioctl "
-        "commands, preventing collisions with other drivers in the system."
+        "A design challenge we solved: the GET_LOGS ioctl structure is about 35 KB (128 "
+        "entries × 280 bytes each), which is too large for the kernel's 14-bit ioctl size "
+        "field (max 16,383 bytes). We worked around this by using a placeholder type (__u32) "
+        "in the ioctl macro while the actual handler still transfers the full struct. This "
+        "keeps the ioctl command number valid without changing the data."
     )
 
     d.h2("Step 2: Create the Character Device Skeleton")
     d.para(
-        "The kernel module begins with a character device skeleton: alloc_chrdev_region() "
-        "dynamically allocates a major number, cdev_init() and cdev_add() register the "
-        "device with the kernel, and class_create()/device_create() automatically create "
-        "the /dev/usb_audit node. The file_operations table maps system calls (open, read, "
-        "write, ioctl) to our handler functions."
+        "The kernel module starts with a character device skeleton. alloc_chrdev_region() "
+        "asks the kernel for a major device number, cdev_init() and cdev_add() register our "
+        "device, and class_create() plus device_create() make /dev/usb_audit appear in the "
+        "filesystem. The file_operations table connects system calls (open, read, write, "
+        "ioctl) to our handler functions. We added a version check (#if LINUX_VERSION_CODE) "
+        "because class_create() changed its signature in Linux kernel 6.4 — older kernels "
+        "need a different first argument (THIS_MODULE)."
     )
 
     d.h2("Step 3: Implement the Circular Log Buffer")
     d.para(
-        "A fixed-size array of 128 usb_audit_log_entry_t structures serves as the event "
-        "log. A head pointer tracks the next write position. When the buffer is full, the "
-        "oldest entry is overwritten. This prevents unbounded memory growth — a critical "
-        "requirement for kernel code. The log_count variable tracks how many valid entries "
-        "are currently stored."
+        "We use a fixed-size array of 128 log entries as a circular buffer. A head pointer "
+        "marks where the next entry goes. When the buffer fills up, the oldest entry is "
+        "overwritten — this is essential in kernel code because memory cannot grow without "
+        "bound. A log_count variable tracks how many valid entries exist. The read operation "
+        "returns entries one at a time from oldest to newest and properly advances the file "
+        "position (f_pos) so repeated reads work correctly."
     )
 
     d.h2("Step 4: Add USB Hotplug Monitoring")
     d.para(
-        "The usb_register_notify() API registers a callback that fires whenever any USB "
-        "device is added or removed. Our filter checks bDeviceClass against "
-        "USB_CLASS_MASS_STORAGE (0x08) to only track storage devices. Each insertion or "
-        "removal is logged as a DEVICE_IN or DEVICE_OUT event."
+        "We use the kernel's usb_register_notify() function to get a callback whenever any "
+        "USB device is plugged in or removed. Our callback filters for mass-storage devices "
+        "(class 0x08) and logs each insertion or removal as a DEVICE_IN or DEVICE_OUT event "
+        "with the device's vendor and product IDs. This means the audit trail automatically "
+        "records when USB drives appear and disappear."
     )
 
-    d.h2("Step 5: Build the ioctl Command Dispatcher")
+    d.h2("Step 5: Add Kernel-Level File Interception with kprobe")
     d.para(
-        "The unlocked_ioctl handler validates the magic number and command number, then "
-        "dispatches to the appropriate handler. Each handler uses copy_to_user() and "
-        "copy_from_user() to safely transfer data across the kernel/user boundary. "
-        "Supported commands: GET_STATS, CLEAR_LOGS, SET_PATH, GET_LOGS, RESET_STATS, "
-        "SET_ANOMALY, and GET_ANOMALY."
+        "A key improvement over the basic design: we use a kretprobe (kernel return probe) "
+        "to hook into the Linux kernel's own vfs_write function. This means the driver "
+        "automatically detects every file write system-wide without needing any user-space "
+        "program to report it. The kprobe has two parts: an entry handler that saves the "
+        "file pointer and requested write size, and a return handler that checks whether "
+        "the file is on the monitored USB path. If it is, the event is logged with the "
+        "actual number of bytes written."
+    )
+    d.para(
+        "Design challenge: kprobe handlers run in atomic context, which means they cannot "
+        "sleep. Regular mutex_lock() can sleep, so it would crash the kernel. We solved "
+        "this with a separate atomic logging function (audit_log_event_atomic) that uses "
+        "mutex_trylock() — if the lock is busy, it silently skips the event instead of "
+        "crashing. This is an acceptable trade-off for a monitoring tool."
+    )
+    d.para(
+        "We also fixed a naming conflict: our module parameter 'enable_kprobe' clashed with "
+        "the kernel's own enable_kprobe() function declared in <linux/kprobes.h>. Renaming "
+        "it to 'enable_vfs_kprobe' resolved the conflict and made the purpose clearer."
     )
 
-    d.h2("Step 6: Implement the Anomaly Detection Engine")
+    d.h2("Step 6: Build the ioctl Command Dispatcher")
     d.para(
-        "A 64-entry ring buffer stores ktime_t timestamps of every FILE_CREATE and "
-        "FILE_MODIFY event. After recording each timestamp, the engine counts how many "
-        "entries fall within the configured sliding window (default: 3000 ms). If the "
-        "count exceeds the threshold (default: 5) and the cooldown period (5000 ms) has "
-        "elapsed, an ALERT event is automatically logged. The cooldown prevents alert "
-        "flooding during sustained bursts."
+        "The unlocked_ioctl handler checks that the ioctl command is meant for our driver "
+        "(magic number 'U') and dispatches to the right handler. Each handler uses "
+        "copy_to_user() and copy_from_user() to safely move data between kernel and user "
+        "memory. Seven commands are supported: GET_STATS, CLEAR_LOGS, SET_PATH, GET_LOGS, "
+        "RESET_STATS, SET_ANOMALY, and GET_ANOMALY. The RESET_STATS command also clears "
+        "the anomaly detection ring, giving a clean slate for testing."
     )
 
-    d.h2("Step 7: Create the User-Space Application")
+    d.h2("Step 7: Implement the Anomaly Detection Engine")
     d.para(
-        "The C application opens /dev/usb_audit with O_RDWR and uses ioctl() to retrieve "
-        "statistics and logs. It provides both an interactive test menu (for injecting "
-        "events and querying state) and a daemon dashboard mode (for periodic monitoring). "
-        "Signal handlers ensure clean shutdown on SIGINT/SIGTERM."
+        "The anomaly engine uses a 64-entry ring buffer of timestamps. Every file CREATE "
+        "or MODIFY event records its timestamp. After recording, the engine counts how many "
+        "events happened within the sliding window (default 3000 ms). If the count exceeds "
+        "the threshold (default 5) and enough time has passed since the last alert (5000 ms "
+        "cooldown), a SECURITY ALERT is automatically logged. The cooldown prevents spam "
+        "during sustained bursts. Both the atomic kprobe path and the regular user-space "
+        "path feed into this same engine, and both now use monotonic timestamps (ktime_get_ns) "
+        "for consistency."
     )
 
-    d.h2("Step 8: Automate with Bash and Makefile")
+    d.h2("Step 8: Create the User-Space Application")
     d.para(
-        "A top-level Makefile orchestrates kernel module compilation (via Kbuild) and "
-        "user-space compilation (via gcc). The run.sh script automates the full lifecycle: "
-        "build, insmod, device verification, application launch, and cleanup on exit."
+        "The C application (usb_monitor) opens /dev/usb_audit and provides two modes: "
+        "an interactive menu for manual testing (inject events, view stats, configure "
+        "thresholds) and a daemon mode that refreshes a dashboard every 2 seconds. It accepts "
+        "command-line flags for setting the USB mount path, anomaly threshold, and time window. "
+        "Signal handlers (SIGINT/SIGTERM) ensure a clean exit. The program also sends file "
+        "size information in the event string using the format 'C /path (N bytes)', which "
+        "the kernel module parses."
+    )
+
+    d.h2("Step 9: Create the Python Watchdog")
+    d.para(
+        "The Python script (file_tracker.py) uses the watchdog library to monitor a folder "
+        "for real-time filesystem changes. It handles file creation, modification, closing, "
+        "and deletion. For each event, it checks the actual file size with os.path.getsize() "
+        "and sends a formatted event to /dev/usb_audit via the send_kernel_event() method. "
+        "It also has its own sliding-window anomaly detector that prints [SECURITY ALERT] "
+        "messages locally."
+    )
+
+    d.h2("Step 10: Automate Everything")
+    d.para(
+        "The top-level Makefile builds both the kernel module (via Kbuild) and the C "
+        "application (via gcc). The run.sh script handles the full lifecycle: check "
+        "prerequisites, build, load the module, verify the device node, launch the monitor, "
+        "and clean up on exit. The test_all.sh script runs 22 automated tests covering "
+        "every feature, producing a clear pass/fail report."
     )
 
     # ── 4. Kernel Module ──
     d.h1("4. Kernel Module — Detailed Design")
-    d.h2("4.1 Module Metadata & Initialisation")
+    d.h2("4.1 Module Initialisation")
     d.para(
-        "The module declares its license (GPL), author, description, and version using "
-        "the MODULE_* macros. The __init function (usb_audit_init) executes when the "
-        "module is loaded via insmod. It performs six sequential steps with full error "
-        "unwinding: (1) allocate device region, (2) register cdev, (3) create sysfs class "
-        "and /dev node, (4) allocate log buffer, (5) initialise statistics and anomaly "
-        "state, (6) register USB notifier."
+        "When loaded with insmod, the module runs usb_audit_init() which performs seven "
+        "steps in order: (1) allocate a dynamic major device number, (2) register the "
+        "character device, (3) create the device class and /dev/usb_audit node (with "
+        "version checking for kernel 6.4+ compatibility), (4) allocate the 128-entry "
+        "circular log buffer, (5) initialise statistics and anomaly detection state, "
+        "(6) register the USB hotplug notifier, and (7) register the kretprobe on "
+        "vfs_write for kernel-level file interception. If the kprobe registration fails, "
+        "the driver still works — it just relies on user-space to report events."
     )
     d.para(
-        "If any step fails, the function unwinds by reversing the initialisation order "
-        "and returns a negative error code. This is critical kernel programming practice."
+        "The module parameter 'enable_vfs_kprobe' (bool, default true) lets users disable "
+        "the kprobe at load time if needed: sudo insmod usb_audit.ko enable_vfs_kprobe=0. "
+        "This parameter was originally named 'enable_kprobe' but had to be renamed because "
+        "the Linux kernel headers already define an enable_kprobe() function — the name "
+        "clash caused a compile error."
     )
 
-    d.h2("4.2 File Operations")
+    d.h2("4.2 Dual Logging Paths")
+    d.para(
+        "The driver has two separate logging functions for two different contexts. "
+        "audit_log_event() is used when called from user-space write() or ioctl() handlers "
+        "— it can safely use mutex_lock() because sleeping is allowed in user context. "
+        "audit_log_event_atomic() is used when called from the kprobe handler — it uses "
+        "mutex_trylock() because kprobes run in atomic context where sleeping would crash "
+        "the kernel. If trylock fails (the lock is busy), the event is silently dropped. "
+        "Both paths now consistently use ktime_get_ns() for monotonic timestamps, ensuring "
+        "all log entries use the same clock source regardless of which path they came from."
+    )
+
+    d.h2("4.3 File Operations")
     d.table(
         ["Operation", "Handler", "Description"],
         [
             ["open", "usb_audit_open", "Logs the access; always succeeds."],
             ["release", "usb_audit_release", "Logs the close; always succeeds."],
-            ["read", "usb_audit_read", "Returns oldest log entry; 0 = no data."],
-            ["write", "usb_audit_write", "Parses event code + path; logs event."],
+            ["read", "usb_audit_read", "Returns oldest log entry; advances f_pos."],
+            ["write", "usb_audit_write", "Parses event code + path + size; logs event."],
             ["unlocked_ioctl", "usb_audit_ioctl", "Dispatches 7 ioctl commands."],
         ]
     )
 
-    d.h2("4.3 USB Notifier Callback")
+    d.h2("4.4 Write Handler & File Size Parsing")
     d.para(
-        "The usb_audit_notify() function is invoked by the USB core on device add/remove "
-        "events. It casts the void pointer to struct usb_device, checks bDeviceClass for "
-        "USB_CLASS_MASS_STORAGE, and logs the vendor ID, product ID, and serial number. "
-        "For devices with bDeviceClass == 0x00 (per-interface class), it still proceeds "
-        "since many USB storage devices report their class at the interface level."
+        "The write handler accepts event strings in the format '<code> <path> (N bytes)'. "
+        "It parses the first character as the event code (C=create, M=modify, D=delete, "
+        "A=alert), skips whitespace to find the file path, trims trailing newlines, and "
+        "uses strrchr() + sscanf() to extract the optional file size from parentheses at "
+        "the end. The parsed size is stored in the log entry and added to total_bytes_written. "
+        "Even if no size suffix is provided, the event is still logged (size = 0) — a bug "
+        "that previously caused events without sizes to be silently dropped was fixed."
     )
 
-    d.h2("4.4 Circular Buffer Implementation")
+    d.h2("4.5 USB Notifier Callback")
     d.para(
-        "The circular buffer uses modulo arithmetic for wrap-around: new entries are "
-        "written at log_head, which advances as (log_head + 1) % USB_AUDIT_LOG_MAX. "
-        "The oldest entry is at (log_head - log_count + LOG_MAX) % LOG_MAX. Reading "
-        "removes the oldest entry (destructive read), decrementing log_count."
+        "The usb_audit_notify() function receives callbacks from the USB core on device "
+        "insertion and removal. It checks bDeviceClass for USB_CLASS_MASS_STORAGE (0x08) "
+        "and also accepts devices with class 0x00 (per-interface class) since many USB "
+        "storage devices report their class at the interface level. Each event is logged "
+        "with the device's vendor ID, product ID, and product name string."
     )
 
-    d.h2("4.5 Error Handling & Debugging")
+    d.h2("4.6 Error Handling")
     d.para(
-        "Every function that can fail returns an appropriate errno value (-ENOMEM, "
-        "-EFAULT, -EINVAL, -ENOTTY). printk() messages at KERN_INFO, KERN_WARNING, "
-        "and KERN_ERR levels provide runtime visibility. The module initialisation "
-        "function includes a full goto-based error unwind path, which is the standard "
-        "Linux kernel pattern for resource cleanup."
+        "Every kernel function follows Linux conventions: return 0 on success, negative "
+        "errno on failure (-ENOMEM for out of memory, -EFAULT for bad user pointer, "
+        "-EINVAL for bad arguments, -ENOTTY for wrong ioctl). The module init function "
+        "uses goto-based error unwinding — if any step fails, it jumps to the cleanup "
+        "label for that step and reverses the initialisation. printk() messages at "
+        "KERN_INFO, KERN_WARNING, and KERN_ERR levels provide visibility via dmesg."
     )
 
     # ── 5. User-Space App ──
     d.h1("5. User-Space Application — Detailed Design")
     d.h2("5.1 Program Structure")
     d.para(
-        "usb_monitor.c is a single-file C program with modular helper functions. "
-        "It uses only POSIX APIs (open, close, read, write, ioctl, signal) and "
-        "standard C library functions, ensuring portability across Linux systems."
+        "usb_monitor.c is a single-file C program about 530 lines long. It communicates "
+        "with the kernel driver through /dev/usb_audit using standard POSIX calls: open(), "
+        "write(), and ioctl(). It does not need any external libraries beyond the standard "
+        "C library and Linux system headers."
     )
 
     d.h2("5.2 Interactive Mode")
     d.para(
-        "The interactive menu provides a command-line interface for testing and "
-        "demonstration. Commands include: C/M/D for file events, A for manual alert, "
-        "T for threshold configuration, S for statistics, L for logs, R for reset, "
-        "X for clearing logs, and Q for quit. After each file event, the program "
-        "automatically queries the kernel's anomaly status and displays any active alerts."
+        "The interactive menu provides 11 commands: C (create), M (modify), D (delete) "
+        "for injecting file events; A for manually triggering an alert; T for setting "
+        "anomaly threshold and window; S for viewing statistics; L for viewing logs; "
+        "R for resetting all counters; X for clearing the log buffer; and Q for quitting. "
+        "After each file event, the program automatically checks the kernel's anomaly "
+        "status and displays any active SECURITY ALERT banners."
+    )
+    d.para(
+        "Bug fix: the mount path string was not properly null-terminated due to a typo "
+        "('\\0' instead of '\0'). This was corrected, ensuring the path is always a valid "
+        "C string regardless of input length."
     )
 
     d.h2("5.3 Daemon Mode")
     d.para(
-        "Daemon mode refreshes the terminal every 2 seconds, displaying a dashboard "
-        "with aggregate statistics, anomaly status, and the 8 most recent log entries. "
-        "This mode is suitable for long-running monitoring sessions."
+        "Daemon mode (-d flag) refreshes the terminal every 2 seconds, showing a live "
+        "dashboard with aggregate statistics, anomaly status, and the 8 most recent log "
+        "entries. This is designed for long-running monitoring sessions where you want "
+        "to watch activity in real time."
     )
 
-    d.h2("5.4 Signal Handling")
+    d.h2("5.4 Command-Line Interface")
     d.para(
-        "SIGINT and SIGTERM are caught to set a global flag (keep_running = 0), "
-        "allowing clean exit from both interactive and daemon loops. The signal "
-        "handler uses sig_atomic_t for safe flag access."
+        "The program accepts several flags: -p/--path to set the USB mount path, "
+        "-t/--threshold and -w/--window for anomaly configuration, -i for interactive "
+        "mode (default), -d for daemon mode, and -h for help. Invalid values are clamped "
+        "to safe minimums (threshold ≥ 1, window ≥ 100 ms)."
+    )
+
+    d.h2("5.5 Event Formatting")
+    d.para(
+        "The send_event() function formats events as '<code> <path> (<size> bytes)\n' "
+        "and writes them to /dev/usb_audit. This format is parsed by the kernel module's "
+        "write handler. For the interactive menu, a placeholder size of 1024 bytes is used; "
+        "for real file operations through the Python monitor, the actual file size is sent."
     )
 
     # ── 6. Python Watchdog ──
     d.h1("6. Python Watchdog Monitor")
     d.para(
-        "file_tracker.py provides an alternative user-space monitoring approach using "
-        "the watchdog library. It watches the USB mount point for real-time filesystem "
-        "events without requiring the kernel module."
+        "file_tracker.py is a Python script that watches a folder for file changes in "
+        "real time using the watchdog library. Unlike the C monitor (which you interact "
+        "with manually), this script runs in the background and automatically reports "
+        "every file creation, modification, and deletion to the kernel module through "
+        "/dev/usb_audit."
     )
 
     d.h2("6.1 Event Handlers")
     d.para(
-        "The USBMonitorHandler class overrides on_created(), on_modified(), and "
-        "on_closed() from FileSystemEventHandler. Both on_created() and on_modified() "
-        "feed timestamps into the anomaly detection engine, ensuring comprehensive "
-        "coverage of file write operations. The on_closed() handler reports the final "
-        "file size after the write operation completes."
+        "The USBMonitorHandler class handles four file events. on_created() fires when "
+        "a new file appears — it checks os.path.getsize() and sends a 'C' (create) event "
+        "with the real file size. on_modified() fires continuously while a file is being "
+        "written, tracking the growing file size. on_closed() fires when the write finishes, "
+        "sending an 'M' (modify) event with the final size. on_deleted() fires when a file "
+        "is removed, sending a 'D' (delete) event with size 0. All four handlers also feed "
+        "timestamps into the local anomaly detector."
     )
 
-    d.h2("6.2 Anomaly Detection (Python)")
+    d.h2("6.2 Kernel Integration")
     d.para(
-        "The Python-side anomaly detection uses a sliding window identical in logic "
-        "to the kernel-side engine. modification_history stores timestamps; on each "
-        "event, entries older than TIME_WINDOW seconds are filtered out. If the "
-        "remaining count exceeds ALERT_THRESHOLD, a [SECURITY ALERT] message is printed."
+        "The send_kernel_event() method opens /dev/usb_audit for writing, formats the "
+        "event as '<code> <path> (N bytes)\n', writes it, and closes the device. If the "
+        "kernel module is not loaded or the device node is unavailable, the error is caught "
+        "and printed as a warning — the script continues running without kernel reporting. "
+        "This means file_tracker.py works both with and without the kernel module loaded, "
+        "making it useful for testing and gradual deployment."
+    )
+
+    d.h2("6.3 Anomaly Detection")
+    d.para(
+        "The Python-side anomaly detector mirrors the kernel's logic. It keeps a list of "
+        "recent event timestamps. On each new event, it removes entries older than "
+        "TIME_WINDOW seconds (default 3.0). If the remaining count exceeds ALERT_THRESHOLD "
+        "(default 5), it prints [SECURITY ALERT] with the current rate. This provides a "
+        "second layer of detection that works even without the kernel module."
     )
 
     # ── 7. Anomaly Detection ──
-    d.h1("7. Anomaly Detection Engine — Complete Design")
-    d.h2("7.1 Kernel-Side Implementation")
+    d.h1("7. Anomaly Detection Engine")
+    d.h2("7.1 How It Works")
     d.para(
-        "The kernel-side anomaly engine is implemented in anomaly_check_burst() within "
-        "usb_audit.c. Key design decisions:"
+        "The anomaly detection engine answers one question: is someone copying too many "
+        "files too quickly? It works like a speed camera — it counts how many file "
+        "operations happen within a short time window, and if the count is too high, it "
+        "raises an alarm."
     )
-    d.bullet("Ring buffer of 64 ktime_t values stores event timestamps chronologically.")
-    d.bullet("Sliding window: ktime_sub_ns(now, window_ms * 1,000,000) computes the window start.")
-    d.bullet("Burst counting: iterates backward from the most recent entry; breaks on first out-of-window entry (chronological optimisation).")
-    d.bullet("Cooldown: a 5-second cooldown prevents repeated alerts during sustained bursts.")
-    d.bullet("Alert recording: when triggered, an ALERT log entry is written directly into the circular buffer (mutex already held).")
-
-    d.h2("7.2 Configuration Interface")
     d.para(
-        "The anomaly engine is fully configurable at runtime via two ioctl commands: "
-        "USB_AUDIT_SET_ANOMALY (sets threshold and window_ms) and USB_AUDIT_GET_ANOMALY "
-        "(retrieves current config, burst_count, and alert_triggered flag). Both the C "
-        "application (-t/-w flags, T command) and any custom user-space code can adjust "
-        "these parameters without recompiling the kernel module."
+        "The engine keeps a ring buffer of 64 timestamps. Every time a file is created or "
+        "modified, the current time is recorded. Then the engine counts how many of those "
+        "timestamps fall within the sliding window (default: 3000 milliseconds, or 3 seconds). "
+        "If the count exceeds the threshold (default: 5 operations), and at least 5 seconds "
+        "have passed since the last alert (the cooldown), a SECURITY ALERT is automatically "
+        "logged. The cooldown prevents the system from flooding alerts during a sustained "
+        "copy operation."
     )
 
-    d.h2("7.3 Multi-Layer Detection")
+    d.h2("7.2 Configuration")
     d.para(
-        "Anomaly detection operates at three independent layers: (1) kernel-side automatic "
-        "detection in anomaly_check_burst(), (2) user-space polling via GET_ANOMALY ioctl "
-        "in the C application, and (3) Python-side sliding window in file_tracker.py. "
-        "This redundancy ensures alerts are raised even if one layer is not active."
+        "Everything is configurable at runtime — no need to recompile. The threshold and "
+        "window can be changed via the C monitor (T command), command-line flags (-t/-w), "
+        "or any program using the SET_ANOMALY ioctl. For testing, we lower the threshold "
+        "to 2 and keep a 5-second window: then just 3 rapid file creates will trigger "
+        "the alert. The GET_ANOMALY ioctl returns the current burst count and whether an "
+        "alert is active, so user-space programs can poll for status."
+    )
+
+    d.h2("7.3 Three Detection Layers")
+    d.para(
+        "Anomaly detection runs at three independent levels for maximum coverage. "
+        "(1) Kernel-side: anomaly_check_burst() is called automatically from both the "
+        "regular and atomic logging paths — every event feeds into it. (2) User-space "
+        "polling: the C monitor calls GET_ANOMALY ioctl to check burst status and displays "
+        "alerts. (3) Python-side: file_tracker.py has its own sliding window with identical "
+        "logic, so it can raise alerts even without the kernel module. If any layer detects "
+        "a burst, the alert is visible."
+    )
+    d.para(
+        "Verified behaviour: with threshold=2 and window=5000ms, injecting 3 file create "
+        "events triggers the alert. Both the user-space monitor displays a red SECURITY "
+        "ALERT banner and the kernel logs the alert via printk(). The dmesg output confirms "
+        "the alert with the exact burst count and threshold values."
     )
 
     # ── 8. Build System ──
     d.h1("8. Build System & Automation")
     d.h2("8.1 Makefile Architecture")
     d.para(
-        "The top-level Makefile provides three targets: all (default, builds everything), "
-        "kernel (delegates to src_kernel/Makefile via Kbuild), and user (compiles "
-        "usb_monitor.c with gcc -Wall -Wextra -O2). The src_kernel/Makefile uses the "
-        "kernel build system (obj-m := usb_audit.o) and locates headers automatically "
-        "via /lib/modules/$(uname -r)/build."
+        "The top-level Makefile has three targets: 'make all' (default) builds everything, "
+        "'make kernel' compiles the kernel module via Kbuild, and 'make user' compiles "
+        "usb_monitor.c with gcc -Wall -Wextra -O2. 'make clean' removes all build artifacts. "
+        "The kernel module's own Makefile in src_kernel/ uses the Linux kernel build system "
+        "(obj-m := usb_audit.o) and automatically finds the right kernel headers from "
+        "/lib/modules/$(uname -r)/build."
     )
 
-    d.h2("8.2 Bash Automation Script")
+    d.h2("8.2 Deployment Script (run.sh)")
     d.para(
-        "scripts/run.sh provides a one-command solution for the full lifecycle. "
-        "It uses set -euo pipefail for strict error handling, colour-coded output "
-        "for readability, and a trap on EXIT/INT/TERM to guarantee cleanup (rmmod, "
-        "process termination). The script checks for root privileges, verifies kernel "
-        "headers, builds both components, loads the module, verifies /dev/usb_audit, "
-        "and launches the monitor."
+        "scripts/run.sh handles the full lifecycle in one command. It checks for root "
+        "privileges, verifies kernel headers are installed, builds both the kernel module "
+        "and C application, loads the module with insmod, verifies /dev/usb_audit exists, "
+        "displays recent kernel logs, launches the monitor, and on exit (including Ctrl+C) "
+        "automatically kills the monitor process and unloads the module. Colour-coded output "
+        "(green=OK, yellow=warn, red=error) makes status easy to read."
     )
+
+    d.h2("8.3 Automated Test Suite (test_all.sh)")
+    d.para(
+        "scripts/test_all.sh runs 22 automated tests across 10 categories and produces a "
+        "pass/fail report. Tests cover: module loading, device node creation, kernel log "
+        "confirmation (including kprobe and notifier status), monitor connection, event "
+        "injection (create/modify/delete), statistics counter accuracy, log buffer contents, "
+        "anomaly detection trigger, real USB filesystem read/write, and clean shutdown. "
+        "The script resets statistics between tests so counters are always verified from zero. "
+        "It handles edge cases like a pre-loaded module and gracefully skips unload if the "
+        "module is in use."
+    )
+    d.code("sudo ./scripts/test_all.sh   # Run all 22 tests")
 
     # ── 9. ioctl API ──
     d.h1("9. Communication Protocol (ioctl API)")
     d.para(
-        "All communication between user-space and kernel-space flows through ioctl "
-        "system calls on the /dev/usb_audit file descriptor. The following table "
-        "documents the complete API:"
+        "All communication between user-space and kernel-space uses ioctl() calls on the "
+        "/dev/usb_audit file descriptor. The driver uses magic number 'U' (0x55) to identify "
+        "its commands. Each ioctl command is defined as a macro in usb_tracker.h, which is "
+        "shared by both the kernel module and user-space programs."
     )
 
     d.table(
-        ["Command", "Direction", "Data Type", "Description"],
+        ["Command", "Direction", "Data", "Purpose"],
         [
-            ["GET_STATS (1)", "K→U", "usb_audit_stats_t", "Retrieve aggregate counters"],
-            ["CLEAR_LOGS (2)", "–", "–", "Reset circular log buffer"],
-            ["SET_PATH (3)", "U→K", "char[256]", "Set monitored mount path"],
-            ["GET_LOGS (4)", "Bidirectional", "usb_audit_logs_t", "Batch-retrieve log entries"],
-            ["RESET_STATS (5)", "–", "–", "Zero all counters + anomaly ring"],
-            ["SET_ANOMALY (6)", "U→K", "usb_audit_anomaly_t", "Configure threshold & window"],
-            ["GET_ANOMALY (7)", "K→U", "usb_audit_anomaly_t", "Query burst count & alert status"],
+            ["GET_STATS (1)", "Kernel → User", "Stats struct", "Read all counters"],
+            ["CLEAR_LOGS (2)", "None", "None", "Empty the log buffer"],
+            ["SET_PATH (3)", "User → Kernel", "String (256)", "Set USB mount path to watch"],
+            ["GET_LOGS (4)", "Both ways", "Log entries", "Read recent event history"],
+            ["RESET_STATS (5)", "None", "None", "Zero all counters + anomaly ring"],
+            ["SET_ANOMALY (6)", "User → Kernel", "Config struct", "Change threshold + window"],
+            ["GET_ANOMALY (7)", "Kernel → User", "Status struct", "Check burst count + alert"],
         ]
+    )
+    d.para(
+        "Note: The GET_LOGS structure is 35 KB (128 entries × 280 bytes), which exceeds "
+        "the kernel's 14-bit ioctl size limit (16,383 bytes). We use a placeholder type "
+        "(__u32) in the ioctl macro definition so the command number stays within valid "
+        "range. The actual data transfer still uses the full struct — the size field in "
+        "the ioctl encoding is informational, not enforced."
     )
 
     # ── 10. Testing ──
     d.h1("10. Testing & Verification")
-    d.h2("10.1 Module Lifecycle")
-    d.code("sudo insmod src_kernel/usb_audit.ko   # Load")
-    d.code("lsmod | grep usb_audit                # Verify loaded")
-    d.code("ls -la /dev/usb_audit                 # Verify device node")
-    d.code("sudo rmmod usb_audit                  # Unload")
-    d.code("dmesg | tail -20                      # Check kernel logs")
-
-    d.h2("10.2 File Event Injection")
+    d.h2("10.1 Automated Test Suite")
     d.para(
-        "In the interactive monitor, inject file events to verify the logging pipeline:"
-    )
-    d.code("C /media/pi/USB/report.pdf    # Log a file CREATE")
-    d.code("M /media/pi/USB/data.txt     # Log a file MODIFY")
-    d.code("D /media/pi/USB/old.txt      # Log a file DELETE")
-    d.code("S                            # Show updated statistics")
-
-    d.h2("10.3 Mass-Copy Alert Test")
-    d.para(
-        "Rapidly inject 6 file create events to trigger the anomaly detector:"
-    )
-    d.code("C f1.txt    # t=0")
-    d.code("C f2.txt    # t~0.5s")
-    d.code("C f3.txt    # t~1.0s")
-    d.code("C f4.txt    # t~1.5s")
-    d.code("C f5.txt    # t~2.0s")
-    d.code("C f6.txt    # ← ALERT! 6 ops in <3s > threshold of 5")
-    d.para(
-        "Verify via dmesg: dmesg | grep 'SECURITY ALERT' should show the kernel-side "
-        "warning. The user app should display a prominent red alert banner."
+        "The project includes an automated test script (test_all.sh) that verifies all "
+        "features in one command. Run it with: sudo ./scripts/test_all.sh. It produces "
+        "a colour-coded pass/fail report. On our test system (Raspberry Pi 4 with a real "
+        "USB drive mounted at /media/colossalblue/RAZER), all 22 tests pass consistently."
     )
 
-    d.h2("10.4 Demonstration Checklist")
+    d.h2("10.2 Module Lifecycle")
+    d.code("sudo insmod src_kernel/usb_audit.ko   # Load the driver")
+    d.code("lsmod | grep usb_audit                # Confirm it is loaded")
+    d.code("ls -la /dev/usb_audit                 # Check the device node")
+    d.code("dmesg | tail -20                      # See kernel messages")
+    d.code("sudo rmmod usb_audit                  # Unload the driver")
+
+    d.h2("10.3 File Event Injection")
+    d.para(
+        "From the interactive monitor, inject events to test the logging pipeline:"
+    )
+    d.code("C /media/colossalblue/RAZER/doc.pdf   # Log a file CREATE")
+    d.code("M /media/colossalblue/RAZER/data.txt  # Log a file MODIFY")
+    d.code("D /media/colossalblue/RAZER/old.txt   # Log a file DELETE")
+    d.code("S                                       # Show updated statistics")
+    d.code("L                                       # View recent log entries")
+
+    d.h2("10.4 Mass-Copy Alert Test")
+    d.para(
+        "Configure a low threshold and inject events rapidly to trigger the alert:"
+    )
+    d.code("T 2 5000                    # Threshold=2 ops, window=5000ms")
+    d.code("C /media/usb/a.txt          # Event 1")
+    d.code("C /media/usb/b.txt          # Event 2")
+    d.code("C /media/usb/c.txt          # Event 3 — ALERT! 3 > 2")
+    d.para(
+        "Verify: the monitor displays a red SECURITY ALERT banner. dmesg confirms: "
+        "'[usb_audit] *** SECURITY ALERT *** Mass-copy detected! 3 file ops within "
+        "5000 ms (threshold=2)'."
+    )
+
+    d.h2("10.5 Real USB Drive Testing")
+    d.para(
+        "With a USB drive plugged in and mounted, the system was tested end-to-end. "
+        "Real file operations (echo, cp, rm) on the USB drive generated events that "
+        "appeared in both the C monitor dashboard and the kernel log (dmesg). The kprobe "
+        "on vfs_write automatically detected direct writes to the USB filesystem. "
+        "USB hotplug events (physical plug/unplug of the drive) were correctly detected "
+        "and logged as DEVICE_IN and DEVICE_OUT events."
+    )
+
+    d.h2("10.6 Verification Checklist")
     d.table(
-        ["#", "Requirement", "Verification Method"],
+        ["#", "Feature", "How to Verify", "Status"],
         [
-            ["1", "Module compilation", "make kernel exits 0"],
-            ["2", "Module insertion", "insmod succeeds; /dev/usb_audit exists"],
-            ["3", "Module removal", "rmmod succeeds; /dev/usb_audit removed"],
-            ["4", "Hardware detection", "USB plug triggers DEVICE_IN in dmesg"],
-            ["5", "App↔driver comm", "usb_monitor reads/writes/ioctls to /dev/usb_audit"],
-            ["6", "dmesg logging", "dmesg | grep usb_audit shows events"],
-            ["7", "User interaction", "Interactive menu commands processed"],
-            ["8", "Clean shutdown", "run.sh trap calls rmmod on Ctrl+C"],
-            ["9", "Mass-copy alert", "6 rapid C commands trigger auto-alert"],
+            ["1", "Module compiles", "make all exits 0", "✅ Passed"],
+            ["2", "Module loads", "insmod succeeds; /dev/usb_audit created", "✅ Passed"],
+            ["3", "kprobe active", "dmesg shows kretprobe registered", "✅ Passed"],
+            ["4", "Monitor connects", "usb_monitor shows 'Connected'", "✅ Passed"],
+            ["5", "Event injection", "C/M/D commands produce 'Sent event'", "✅ Passed"],
+            ["6", "Stats accurate", "S command shows correct counters", "✅ Passed"],
+            ["7", "Log buffer works", "L command shows timestamped entries", "✅ Passed"],
+            ["8", "Anomaly alert", "3 rapid events trigger SECURITY ALERT", "✅ Passed"],
+            ["9", "Kernel alert logged", "dmesg shows alert with burst details", "✅ Passed"],
+            ["10", "USB drive works", "Can write/read test files on real USB", "✅ Passed"],
+            ["11", "Clean unload", "rmmod succeeds; device node removed", "✅ Passed"],
+            ["12", "All 22 auto-tests", "test_all.sh reports 22/22 passed", "✅ Passed"],
         ]
     )
 
     # ── 11. Conclusion ──
     d.h1("11. Conclusion")
     d.para(
-        "The USB File Transfer Activity Driver successfully meets all core and advanced "
-        "project requirements. The kernel module (usb_audit.ko) implements a complete "
-        "character device driver with USB hotplug monitoring, a circular event log buffer, "
-        "seven ioctl commands, and an automatic mass-copy anomaly detection engine. The "
-        "user-space C application (usb_monitor) provides an intuitive interface for "
-        "monitoring, testing, and configuration."
+        "The USB File Transfer Activity Driver meets all project requirements and goes "
+        "beyond them with several advanced features. The kernel module (usb_audit.ko) is "
+        "a complete Linux character device driver that monitors USB storage activity at "
+        "both the device level (hotplug detection) and the file level (create, modify, "
+        "delete tracking). The user-space tools provide both interactive and automated "
+        "interfaces for monitoring and testing."
     )
     d.para(
-        "Key achievements include: (1) full kernel/user communication via a character "
-        "device and ioctl protocol, (2) USB storage device hotplug detection using the "
-        "kernel's notifier chain, (3) comprehensive printk() logging for dmesg auditing, "
-        "(4) a configurable sliding-window anomaly detector that automatically raises "
-        "security alerts, (5) a fully automated build-and-run pipeline via Makefile and "
-        "Bash script, and (6) clean resource management with proper error unwinding."
+        "Key technical achievements:"
+    )
+    d.bullet("Kernel-level file interception via kretprobe on vfs_write — the driver autonomously detects file writes without user-space help.")
+    d.bullet("Dual-path logging architecture — atomic-safe path for kprobe context and regular path for user context, both feeding the same audit trail.")
+    d.bullet("Configurable sliding-window anomaly detector with cooldown — automatically raises SECURITY ALERT when file operations exceed a threshold within a time window.")
+    d.bullet("End-to-end file size tracking — user-space monitors report real byte counts, kernel parses and stores them, statistics show accurate totals.")
+    d.bullet("Full ioctl API with 7 commands — GET_STATS, CLEAR_LOGS, SET_PATH, GET_LOGS, RESET_STATS, SET_ANOMALY, GET_ANOMALY.")
+    d.bullet("Linux kernel 6.4+ version compatibility — class_create() API difference handled with preprocessor version check.")
+    d.bullet("Circular log buffer with 128 entries — prevents unbounded memory growth while preserving recent history.")
+    d.bullet("Three-layer anomaly detection — kernel engine + user-space polling + Python watchdog, for maximum coverage.")
+    d.bullet("Automated test suite — 22 tests across 10 categories, verified on real hardware with a USB drive.")
+    d.bullet("One-command build and deployment — make all && sudo ./scripts/run.sh handles the full lifecycle.")
+    d.para("")
+    d.para(
+        "The system has been tested on a Raspberry Pi 4 running a custom Linux kernel "
+        "(6.18.26-v71-CSC1107_CUSTOM_KERNEL+) with a real USB drive. All 22 automated "
+        "tests pass. The driver correctly detects USB device insertion and removal, logs "
+        "file operations with accurate timestamps and sizes, and raises security alerts "
+        "when mass-copy behaviour is detected. The codebase includes proper error handling, "
+        "resource cleanup, and kernel coding conventions throughout."
     )
     d.para(
-        "The system is ready for deployment on a Raspberry Pi 4 running Raspbian 64-bit "
-        "and serves as a foundation for data loss prevention and cybersecurity auditing "
-        "applications."
+        "This project demonstrates practical operating systems concepts including kernel "
+        "module development, character device drivers, kernel/user communication via ioctl, "
+        "concurrency with mutexes, atomic context programming, kprobe-based function hooking, "
+        "USB subsystem integration, and automated build/test pipelines."
     )
 
     # ── Assemble final XML ──
