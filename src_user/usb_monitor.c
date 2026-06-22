@@ -47,6 +47,7 @@
  * Global State
  * ------------------------------------------------------------------------- */
 static volatile sig_atomic_t keep_running = 1;  /* set to 0 on SIGINT / SIGTERM */
+static __u64 boot_offset_ns = 0;     /* monotonic→wall-clock offset (computed at startup) */
 
 /* -------------------------------------------------------------------------
  * Signal Handler — graceful shutdown
@@ -63,7 +64,10 @@ static void signal_handler(int signum)
 static const char *format_time(__u64 ns)
 {
     static char buf[64];
-    time_t sec  = (time_t)(ns / 1000000000ULL);
+    /* Kernel stores monotonic timestamps (ns since boot).  Add the
+     * boot-time offset so we display actual wall-clock time.        */
+    __u64 wall_ns = ns + boot_offset_ns;
+    time_t sec  = (time_t)(wall_ns / 1000000000ULL);
     struct tm tm_info;
 
     localtime_r(&sec, &tm_info);
@@ -476,6 +480,16 @@ int main(int argc, char *argv[])
             print_usage(argv[0]);
             return 1;
         }
+    }
+
+    /* -- Compute boot offset: monotonic → wall-clock ------------------ */
+    {
+        struct timespec wall, mono;
+        clock_gettime(CLOCK_REALTIME,  &wall);
+        clock_gettime(CLOCK_MONOTONIC, &mono);
+        __u64 w = (__u64)wall.tv_sec * 1000000000ULL + (__u64)wall.tv_nsec;
+        __u64 m = (__u64)mono.tv_sec * 1000000000ULL + (__u64)mono.tv_nsec;
+        boot_offset_ns = w - m;
     }
 
     /* -- Install signal handlers for clean shutdown -------------------- */

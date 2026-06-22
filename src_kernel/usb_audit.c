@@ -308,14 +308,15 @@ static void anomaly_check_burst(ktime_t now)
     /* Window start = now minus configured window. */
     window_start = ktime_sub_ns(now, (s64)anomaly_window_ms * 1000000ULL);
 
-    /* Count recent events within the sliding window. */
+    /* Count recent events within the sliding window.
+     * Scan all entries — the trylock path in audit_log_event_atomic may
+     * insert timestamps slightly out of order, so an early break could
+     * undercount burst events.  64 iterations is negligible cost.      */
     for (i = 0; i < anomaly_ring_count; i++) {
         int idx = (anomaly_ring_idx - 1 - i + USB_AUDIT_ANOMALY_RING_SIZE)
                   % USB_AUDIT_ANOMALY_RING_SIZE;
         if (ktime_after(anomaly_ring[idx], window_start))
             burst++;
-        else
-            break;  /* ring is chronological — stop at first out-of-window */
     }
 
     /* Cooldown: don't spam alerts. */

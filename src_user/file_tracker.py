@@ -65,6 +65,7 @@ class USBMonitorHandler(FileSystemEventHandler):
         try:
             current_size = os.path.getsize(event.src_path)
             print(f"[WRITING]  Path: {event.src_path} | Size: {current_size} bytes")
+            self.send_kernel_event('M', event.src_path, current_size)
         except FileNotFoundError:
             pass
 
