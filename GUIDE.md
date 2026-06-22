@@ -1,4 +1,4 @@
-# 🧠 The Absolute Beginner's Guide to Our USB File Transfer Activity Driver
+# The Absolute Beginner's Guide to Our USB File Transfer Activity Driver
 
 ---
 
@@ -8,18 +8,19 @@
 
 ---
 
-## 📖 Table of Contents
+## Table of Contents
 
 1. [What Problem Are We Solving?](#1-what-problem-are-we-solving)
 2. [The Big Picture: How a Computer Runs Code](#2-the-big-picture-how-a-computer-runs-code)
-3. [User-Space vs. Kernel-Space: The Two Worlds](#3-user-space-vs-kernel-space-the-two-worlds)
-4. [What Is a "Driver" and Why Do We Need One?](#4-what-is-a-driver-and-why-do-we-need-one)
+3. [User-Space vs. Kernel-Space](#3-user-space-vs-kernel-space-the-two-worlds)
+4. [What Is a "Driver"?](#4-what-is-a-driver-and-why-do-we-need-one)
 5. [Our Project: The Bird's-Eye View](#5-our-project-the-birds-eye-view)
-6. [The Three Layers of Our System](#6-the-three-layers-of-our-system)
+6. [The Layers of Our System](#6-the-layers-of-our-system)
 7. [File-by-File Walkthrough](#7-file-by-file-walkthrough)
-8. [How to Build and Run It (Step by Step)](#8-how-to-build-and-run-it-step-by-step)
-9. [How to Test the Mass-Copy Alert](#9-how-to-test-the-mass-copy-alert)
-10. [Glossary: Jargon Buster](#10-glossary-jargon-buster)
+8. [How to Build and Run (Step by Step)](#8-how-to-build-and-run-it-step-by-step)
+9. [Testing the Mass-Copy Alert](#9-how-to-test-the-mass-copy-alert)
+10. [Automated Testing](#10-automated-testing)
+11. [Glossary: Jargon Buster](#11-glossary-jargon-buster)
 
 ---
 
@@ -35,17 +36,15 @@ This is called **Data Loss Prevention (DLP)** — stopping sensitive data from w
 
 ## 2. The Big Picture: How a Computer Runs Code
 
-Before we dive into our project, you need to understand the two "levels" at which code runs on a computer.
-
 Think of a computer like a **restaurant**:
 
 | Restaurant Analogy | Computer Equivalent |
 |---|---|
-| The **kitchen** — where food is prepared, stoves are controlled, inventory is managed. Only the chef has access. | The **kernel** — the core of the operating system. It controls the CPU, memory, and all hardware. |
-| The **dining room** — where customers sit, order food, and eat. They can only see what the waiter brings them. | **User-space** — where your apps live (browser, text editor, games). Apps can't touch hardware directly. |
-| The **waiter** — takes orders from the dining room to the kitchen and brings food back. | **System calls** — the mechanism that lets user apps ask the kernel to do things. |
+| The **kitchen** — where food is prepared, stoves are controlled. Only the chef has access. | The **kernel** — the core of the OS. It controls CPU, memory, and all hardware. |
+| The **dining room** — where customers sit and order. They only see what the waiter brings. | **User-space** — where your apps live (browser, text editor, games). |
+| The **waiter** — takes orders to the kitchen and brings food back. | **System calls** — how apps ask the kernel to do things. |
 
-**Key idea:** Your apps (user-space) can't just reach out and grab data from a USB stick. They have to *ask the kernel* to do it for them. The kernel is the boss of all hardware.
+**Key idea:** Apps can't touch hardware directly. They must *ask the kernel*. The kernel is the boss.
 
 ---
 
@@ -58,31 +57,29 @@ Think of a computer like a **restaurant**:
 │                                          │
 │  ✅ Can: open files, print text, play   │
 │         music, browse the web            │
-│  ❌ Can't: talk to USB ports directly,  │
-│          manage memory, control the CPU  │
+│  ❌ Can't: talk to USB ports directly   │
 ├─────────────────────────────────────────┤
 │             KERNEL-SPACE                 │
 │  (The Linux kernel — the "brain")       │
 │                                          │
-│  ✅ Can: control ALL hardware, manage   │
-│         memory, schedule processes       │
-│  ✅ Has: absolute power over everything │
+│  ✅ Can: control ALL hardware           │
+│  ✅ Has: absolute power                 │
 └─────────────────────────────────────────┘
 ```
 
-**Why separate them?** Safety. If a buggy app crashes, it only crashes itself. If the kernel crashed, the whole computer would freeze. The wall between user-space and kernel-space protects the system.
+**Why separate them?** Safety. If a buggy app crashes, only that app dies. If the kernel crashed, the whole computer freezes.
 
 ---
 
 ## 4. What Is a "Driver" and Why Do We Need One?
 
-A **driver** is a piece of kernel-space code that teaches the kernel how to talk to a specific piece of hardware.
+A **driver** is kernel code that teaches the kernel how to talk to hardware.
 
 | Without a driver | With a driver |
 |---|---|
-| You plug in a USB stick. The kernel sees "something" on the USB port but has no idea what it is or how to read files from it. | The USB storage driver kicks in and says "I know how to talk to this! Let me handle it." Now the kernel can read/write files. |
+| You plug in a USB stick. The kernel sees "something" but doesn't know what to do with it. | The USB driver says "I know how to talk to this!" Now it works. |
 
-**We wrote a custom driver.** Not to *use* the USB stick (Linux already has that), but to **watch and log** every file operation happening on it. Think of it as a security camera that we installed *inside* the kernel.
+**We wrote a custom driver.** Not to *use* the USB stick (Linux already does that), but to **watch and log** every file operation happening on it. Think of it as a security camera installed *inside* the kernel.
 
 ---
 
@@ -100,71 +97,82 @@ Here's what happens when our system is running:
 3. You copy a file to the USB stick
        │
        ▼
-4. Our driver logs the file name, size, and time
+4. TWO things happen simultaneously:
+   a) The kernel's kprobe automatically detects the write → logs it
+   b) The user-space monitor sees the change → sends an event to the driver
        │
        ▼
-5. You copy 6 files in 3 seconds (suspicious!)
+5. Both paths feed into the same anomaly detection engine
        │
        ▼
-6. Our driver AUTOMATICALLY raises a SECURITY ALERT
+6. You copy many files rapidly (suspicious!)
        │
        ▼
-7. A user app shows all the logs and alerts on screen
+7. The driver AUTOMATICALLY raises a SECURITY ALERT 🚨
+       │
+       ▼
+8. The dashboard shows the alert; dmesg has a permanent record
 ```
 
 All of this is **logged permanently** in the kernel's message buffer (`dmesg`) and can be retrieved at any time.
 
 ---
 
-## 6. The Three Layers of Our System
-
-Our project has three layers working together:
+## 6. The Layers of Our System
 
 ### Layer 1: The Kernel Module (`usb_audit.ko`)
 - Lives in **kernel-space**
-- Created when we run `make` in `src_kernel/`
-- Loaded into the kernel with `sudo insmod usb_audit.ko`
 - Creates a "virtual file" at `/dev/usb_audit` that user apps can talk to
 - Watches for USB devices being plugged in / unplugged
-- Maintains a **circular buffer** (a fixed-size list that wraps around) of the last 128 events
-- Runs the **anomaly detection engine** — automatically detects mass-copy bursts
+- Has a **kprobe** that hooks into the kernel's own file-writing function — so it automatically detects every file write without any app needing to tell it
+- Maintains a **circular buffer** (128 entries) of recent events
+- Runs the **anomaly detection engine**
 
 ### Layer 2: The User-Space C Application (`usb_monitor`)
-- Lives in **user-space**
-- A normal program you run from the terminal
-- Opens `/dev/usb_audit` and talks to the kernel module using **ioctl** (a special kind of system call for drivers)
-- Displays a dashboard with statistics, logs, and alerts
+- A normal terminal program
+- Opens `/dev/usb_audit` and talks to the kernel using **ioctl**
+- Shows a dashboard with statistics, logs, and alerts
 - Lets you inject test events to verify the system works
+- Has interactive and daemon (auto-refresh) modes
 
 ### Layer 3: The Python Watchdog (`file_tracker.py`)
-- An alternative user-space monitor
-- Uses the `watchdog` library to watch the USB mount folder in real time
-- Has its own independent mass-copy detection
-- Useful for demonstrations on the Raspberry Pi
+- An alternative monitor using the `watchdog` library
+- Watches the USB folder in real time for file changes
+- Sends events to the kernel module with real file sizes
+- Has its own independent anomaly detector
+- Works even without the kernel module loaded
+
+### Layer 4: The Automation Scripts
+- `run.sh` — one command does everything: build, load, run, cleanup
+- `test_all.sh` — runs 22 automated tests; tells you if everything works
+- `generate_report.py` — creates the Word document report
 
 ```
-┌──────────────────────────────────────────────────┐
-│                  USER-SPACE                       │
-│  ┌──────────────┐    ┌────────────────────────┐  │
-│  │ usb_monitor  │    │   file_tracker.py      │  │
-│  │  (C app)     │    │   (Python watchdog)    │  │
-│  └──────┬───────┘    └───────────┬────────────┘  │
-│         │ ioctl()                │ watchdog lib   │
-│         ▼                        ▼                │
-├──────────────────────────────────────────────────┤
-│                KERNEL-SPACE                       │
-│  ┌──────────────────────────────────────────┐    │
-│  │         usb_audit.ko (our driver)        │    │
-│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ │    │
-│  │  │ USB      │ │ Circular │ │ Anomaly  │ │    │
-│  │  │ Notifier │ │ Log Buf  │ │ Detector │ │    │
-│  │  └──────────┘ └──────────┘ └──────────┘ │    │
-│  └──────────────────────────────────────────┘    │
-│                      │                            │
-│                      ▼                            │
-│              /dev/usb_audit                       │
-│           (character device)                      │
-└──────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│                    USER-SPACE                         │
+│  ┌──────────┐  ┌──────────────┐  ┌───────────────┐  │
+│  │usb_monitor│  │file_tracker  │  │test_all.sh    │  │
+│  │ (C app)  │  │   (.py)      │  │ (auto tests)  │  │
+│  └────┬─────┘  └──────┬───────┘  └───────┬───────┘  │
+│       │               │                   │          │
+│       │    ioctl()    │   write()         │  runs    │
+│       ▼               ▼                   ▼          │
+├──────────────────────────────────────────────────────┤
+│                  KERNEL-SPACE                         │
+│  ┌──────────────────────────────────────────────┐    │
+│  │           usb_audit.ko (our driver)          │    │
+│  │  ┌────────┐ ┌──────────┐ ┌────────────────┐ │    │
+│  │  │  USB   │ │ Circular │ │   Anomaly      │ │    │
+│  │  │Notifier│ │ Log Buf  │ │   Detector     │ │    │
+│  │  └────────┘ └──────────┘ └────────────────┘ │    │
+│  │  ┌──────────────────────────────────────┐   │    │
+│  │  │  kprobe on vfs_write (auto-detect)   │   │    │
+│  │  └──────────────────────────────────────┘   │    │
+│  └──────────────────────────────────────────────┘    │
+│                      │                                │
+│              /dev/usb_audit                           │
+│           (character device)                          │
+└──────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -173,40 +181,42 @@ Our project has three layers working together:
 
 ### `include/usb_tracker.h` — The "Contract"
 
-This is a **header file** — it defines the data structures and commands that both the kernel module and the user app agree to use. Think of it as a *contract*: "If you send me this kind of data, I'll understand it."
-
-**What it defines:**
+The **header file** that defines data structures both the kernel module and user apps agree on.
 
 | Concept | Plain English |
 |---|---|
-| `usb_audit_log_entry_t` | A single event record: "At time X, PID Y created file Z (size: 1024 bytes)" |
-| `usb_audit_stats_t` | Running totals: "So far: 42 files created, 3,000,000 bytes written, 2 alerts" |
-| `usb_audit_anomaly_t` | Anomaly config: "Alert if more than 5 files change within 3000 ms" |
-| `USB_AUDIT_GET_STATS` | ioctl command: "Hey kernel, give me the current statistics" |
-| `USB_AUDIT_SET_ANOMALY` | ioctl command: "Hey kernel, change the anomaly threshold to 10" |
+| `usb_audit_log_entry_t` | A single event: "At time X, PID Y created file Z (size: 1024 bytes)" |
+| `usb_audit_stats_t` | Running totals: "42 files created, 3 MB written, 2 alerts" |
+| `usb_audit_anomaly_t` | Anomaly config: "Alert if >5 file ops in 3000 ms" |
+| `USB_AUDIT_GET_STATS` | ioctl command: "Kernel, give me the statistics" |
+| `USB_AUDIT_SET_ANOMALY` | ioctl command: "Kernel, change the threshold to 10" |
+
+> One tricky problem we solved: the `GET_LOGS` structure is 35 KB — too big for the kernel's ioctl size field (max 16 KB). We used a placeholder type in the macro definition to keep the command number valid.
 
 ### `src_kernel/usb_audit.c` — The Kernel Module (The Brain)
 
-This is the most important file. It's written in C and runs **inside the Linux kernel**. Here's what each section does:
+The most important file. Runs **inside the Linux kernel**.
 
-#### 📌 Module Registration
+#### Module Registration
 ```c
 module_init(usb_audit_init);
 module_exit(usb_audit_exit);
 ```
-When you type `sudo insmod usb_audit.ko`, the kernel calls `usb_audit_init()`. When you type `sudo rmmod usb_audit`, it calls `usb_audit_exit()`. These are the "on" and "off" switches.
+`insmod` calls `usb_audit_init()`. `rmmod` calls `usb_audit_exit()`. These are the "on" and "off" switches.
 
-#### 📌 Character Device Creation
-The driver creates a **character device** (a special file at `/dev/usb_audit`). Unlike a regular file that stores data on disk, this "file" is a **pipe to our driver**. When a user app reads from it, they get log entries. When they write to it, they inject events.
+#### Character Device
+Creates `/dev/usb_audit` — a "pipe" between user apps and the driver. Apps read to get logs, write to inject events, and use ioctl for commands.
 
-#### 📌 USB Hotplug Notifier
-```c
-usb_register_notify(&usb_nb);
-```
-This tells the kernel: "Whenever a USB device is plugged in or unplugged, call my function `usb_audit_notify()`." Our function checks if it's a storage device and logs the event.
+#### USB Hotplug Notifier
+Tells the kernel: "Tell me whenever a USB storage device is plugged in or removed." Our function checks the device class and logs DEVICE_IN or DEVICE_OUT events.
 
-#### 📌 Circular Log Buffer
-A **circular buffer** is a fixed-size array (128 slots) that wraps around. When full, the oldest entry gets overwritten. This prevents memory from growing forever.
+#### kprobe — Automatic File Write Detection
+This is a key feature. A **kretprobe** hooks into `vfs_write()`, the kernel's own file-writing function. Every time any program writes a file anywhere on the system, our probe fires. It checks: "Is this file on the monitored USB path?" If yes, it logs the event automatically — no user app needed.
+
+The challenge: kprobe handlers run in a special mode where they can't sleep. Regular locks (mutexes) can sleep, so they'd crash the kernel. We solved this with a special "trylock" that either grabs the lock instantly or skips the event. Safe.
+
+#### Circular Log Buffer
+A fixed-size array (128 slots) that wraps around. When full, oldest entries get overwritten. No infinite memory growth.
 
 ```
 Position:  0    1    2   ...  125  126  127
@@ -217,13 +227,11 @@ Position:  0    1    2   ...  125  126  127
          tail (oldest)           head (next write)
 ```
 
-#### 📌 Anomaly Detection Engine (The Secret Sauce)
-This is the **advanced challenge** feature. Here's how it works:
-
-1. Every time a file is created or modified, we record the **timestamp** in a 64-slot ring buffer.
-2. After recording, we count: "How many timestamps in the ring are within the last 3 seconds?"
-3. If the count is **more than 5**, we raise an alert.
-4. A **cooldown** (5 seconds) prevents alert spam.
+#### Anomaly Detection Engine (The Secret Sauce)
+1. Every file CREATE or MODIFY records its **timestamp** in a 64-slot ring.
+2. After recording, count: "How many timestamps are within the last 3 seconds?"
+3. If count > 5 AND 5 seconds since last alert → **SECURITY ALERT!**
+4. The cooldown prevents alert spam during sustained copying.
 
 ```
 Timeline:
@@ -233,59 +241,50 @@ t=0.8  ──► CREATE file3.txt  (ring: [0.0, 0.4, 0.8])
 t=1.2  ──► CREATE file4.txt  (ring: [0.0, 0.4, 0.8, 1.2])
 t=1.6  ──► CREATE file5.txt  (ring: [0.0, 0.4, 0.8, 1.2, 1.6])
 t=2.0  ──► CREATE file6.txt  (ring: [0.0, 0.4, 0.8, 1.2, 1.6, 2.0])
-                               ↑ 6 entries in 3s window → ALERT! 🚨
+                               ↑ 6 entries in 3s → ALERT! 🚨
 ```
 
-#### 📌 printk() Logging
-```c
-printk(KERN_INFO "[usb_audit] Event from PID %d: type=%d path=%s\n", ...);
-```
-`printk()` is the kernel's version of `printf()`. Messages go into the kernel's log buffer, which you can view with `dmesg`. This is how our driver leaves an audit trail.
+Two important details: (1) the anomaly engine is fed by **both** the kprobe path (automatic) and user-space events (injected), (2) both paths use the same clock type (monotonic) so timestamps are consistent.
 
-### `src_user/usb_monitor.c` — The User-Space C App (The Dashboard)
+### `src_user/usb_monitor.c` — The Dashboard
 
-This is a normal C program. It uses **ioctl** (I/O Control) to send commands to our driver through `/dev/usb_audit`.
-
-**Key features:**
-- **Interactive mode:** A menu where you type commands (`C /path/to/file` to simulate a file creation, `S` for stats, etc.)
-- **Daemon mode:** A dashboard that refreshes every 2 seconds, showing live stats and logs
-- **Auto-check:** After every file event, it asks the kernel "Did that trigger an alert?" and shows a warning banner if so
+A C program that talks to the driver via ioctl. Key features:
+- **Interactive mode:** A menu where you type commands (`C /path` to simulate file creation, `S` for stats, `L` for logs)
+- **Daemon mode:** Dashboard refreshing every 2 seconds
+- **Auto-check:** After each event, asks the kernel "Did that trigger an alert?" and shows a warning banner if so
+- **Configurable:** Set path, threshold, and window via command-line flags
 
 ### `src_user/file_tracker.py` — The Python Watchdog
 
-Uses the `watchdog` Python library to watch the actual USB mount folder on the Raspberry Pi. It detects real file operations and implements its own sliding-window anomaly detection. **Both file creation and modification events** feed into the anomaly detector, ensuring comprehensive mass-copy coverage.
+Watches the USB folder in real time. Detects file creation, modification, closing, and deletion. Sends events to the kernel module through `/dev/usb_audit` with the real file size. Has its own sliding-window anomaly detector as a backup.
 
 ### `scripts/run.sh` — The One-Click Launcher
 
-A Bash script that does everything for you:
-1. Checks you're running as root
-2. Compiles the kernel module
-3. Compiles the user app
-4. Loads the module into the kernel
-5. Verifies `/dev/usb_audit` exists
-6. Launches the monitor
-7. When you press Ctrl+C, it cleans everything up
+Does everything: checks root, verifies headers, builds, loads module, verifies device, launches monitor, cleans up on Ctrl+C.
 
-Just run: `sudo ./scripts/run.sh`
+### `scripts/test_all.sh` — The Automated Tester
 
-### `Makefile` — The Build System
+Runs 22 tests covering every feature. Produces a pass/fail report. Verifies: module loading, device node, kprobe status, notifier, monitor connection, event injection (C/M/D), statistics accuracy, log buffer, anomaly detection, USB drive I/O, clean shutdown.
 
-Tells the compiler how to turn our source code into runnable programs. `make all` builds everything; `make clean` removes build artifacts.
+### `scripts/generate_report.py` — The Report Generator
+
+Creates the Word document report using the `python-docx` library. No hand-crafted XML — just clean Python code.
 
 ---
 
 ## 8. How to Build and Run It (Step by Step)
 
-> ⚠️ **You must be on a Raspberry Pi 4 running Raspbian 64-bit** (or any Linux system with kernel headers installed).
+> ⚠️ **You need a Raspberry Pi 4 running Raspbian 64-bit** (or any Linux with kernel headers).
 
-### Step 1: Install the tools
+### Step 1: Install tools
 ```bash
 sudo apt update
 sudo apt install raspberrypi-kernel-headers build-essential -y
 ```
 
-### Step 2: Build everything
+### Step 2: Clone and build
 ```bash
+git clone https://github.com/AfifLotfi/OS-Grp-10.git
 cd OS-Grp-10
 make all
 ```
@@ -297,10 +296,6 @@ This produces:
 ### Step 3: Load the driver
 ```bash
 sudo insmod src_kernel/usb_audit.ko
-```
-
-Check it worked:
-```bash
 ls -la /dev/usb_audit    # should show the device file
 dmesg | tail -5          # should show "Driver loaded successfully"
 ```
@@ -313,81 +308,119 @@ sudo ./src_user/usb_monitor --interactive
 ### Step 5: Test it
 At the `Command →` prompt:
 ```
-C test.txt
-C test2.txt
-C test3.txt
-C test4.txt
-C test5.txt
-C test6.txt     ← This should trigger a SECURITY ALERT!
-S               ← Show statistics
+S               ← Show statistics (should be all zeros)
+C test.txt      ← Simulate file CREATE
+M test.txt      ← Simulate file MODIFY
+D test.txt      ← Simulate file DELETE
+S               ← Counters should be 1 each
 L               ← Show log entries
 Q               ← Quit
 ```
 
-### Step 6: Unload the driver
+### Step 6: Test mass-copy alert
+```
+T 2 5000        ← Threshold=2, window=5000ms
+C a.txt         ← Event 1
+C b.txt         ← Event 2
+C c.txt         ← Event 3 — ALERT! 🚨
+```
+
+### Step 7: Unload
 ```bash
 sudo rmmod usb_audit
 ```
 
-### Or... Just Run the Script!
+### Or just run the script!
 ```bash
-sudo ./scripts/run.sh --interactive
+sudo ./scripts/run.sh
 ```
 
 ---
 
 ## 9. How to Test the Mass-Copy Alert
 
-### Via the C app (interactive mode)
+### Via the C monitor
 ```
-T 5 3000          ← Set threshold: 5 ops in 3000ms
+T 2 5000          ← Set threshold: 2 ops in 5000ms
 C a.txt
 C b.txt
-C c.txt
-C d.txt
-C e.txt
-C f.txt           ← ALERT! 🚨
+C c.txt           ← ALERT! 🚨
 ```
 
-### Via dmesg (kernel logs)
+### Verify in kernel logs
 ```bash
 dmesg | grep "SECURITY ALERT"
-# Output: [usb_audit] *** SECURITY ALERT *** Mass-copy detected! 6 file ops within 3000 ms (threshold=5)
+# → [usb_audit] *** SECURITY ALERT *** Mass-copy detected!
+#   3 file ops within 5000 ms (threshold=2)
 ```
 
-### Custom thresholds
+### With custom thresholds
 ```bash
-# Alert after just 3 files within 2 seconds:
+# Alert after 4 files within 2 seconds:
 sudo ./src_user/usb_monitor -i -t 3 -w 2000
 ```
 
+### Real file copy test
+```bash
+# Create 10 files rapidly on the USB drive:
+for i in $(seq 1 10); do echo "data$i" > /media/pi/USB/mass_$i.txt; done
+# The kprobe auto-detects these writes and the anomaly engine fires!
+```
+
 ---
 
-## 10. Glossary: Jargon Buster
+## 10. Automated Testing
+
+Run the test suite to verify everything works:
+
+```bash
+sudo ./scripts/test_all.sh
+```
+
+It checks 22 things automatically:
+- ✅ Module loads and creates `/dev/usb_audit`
+- ✅ kprobe registered on vfs_write
+- ✅ USB notifier registered
+- ✅ Monitor connects and sets path
+- ✅ Event injection works (C/M/D)
+- ✅ Statistics counters are accurate
+- ✅ Log buffer stores entries
+- ✅ Anomaly detection triggers alerts
+- ✅ Real USB drive is writable
+- ✅ Clean shutdown works
+
+**Result on our test Pi: 22/22 passed.**
+
+---
+
+## 11. Glossary: Jargon Buster
 
 | Term | What It Actually Means |
 |---|---|
-| **Kernel** | The core of the operating system. The boss of all hardware. |
-| **User-space** | Where normal applications run. Restricted access to hardware. |
-| **Kernel module (.ko)** | A plugin for the kernel. You can load/unload it without rebooting. |
-| **Driver** | Code that tells the kernel how to talk to hardware. |
-| **Character device** | A virtual file (like `/dev/usb_audit`) that acts as a pipe between a user app and a driver. |
-| **insmod** | "Insert Module" — loads a `.ko` file into the running kernel. |
+| **Kernel** | The core of the OS. The boss of all hardware. |
+| **User-space** | Where normal apps run. Limited access. |
+| **Kernel module (.ko)** | A plugin for the kernel. Load/unload without rebooting. |
+| **Driver** | Code that teaches the kernel to talk to hardware. |
+| **Character device** | A virtual file like `/dev/usb_audit` — a pipe between an app and a driver. |
+| **insmod** | "Insert Module" — loads a `.ko` file into the kernel. |
 | **rmmod** | "Remove Module" — unloads a kernel module. |
-| **ioctl** | "I/O Control" — a system call that lets user apps send custom commands to a driver. |
+| **ioctl** | "I/O Control" — a system call for sending custom commands to a driver. |
+| **kprobe / kretprobe** | A kernel mechanism that lets you hook into any kernel function. We hook `vfs_write()` to auto-detect file writes. |
 | **printk()** | The kernel's version of `printf()`. Messages go to `dmesg`. |
-| **dmesg** | A command that shows the kernel's message log. Like a black box recorder. |
-| **Circular buffer** | A fixed-size list where new entries overwrite the oldest ones. Never grows infinitely. |
-| **Sliding window** | A time-based filter: "Look at the last N seconds of data." The window slides forward as time passes. |
-| **Anomaly detection** | Spotting unusual patterns. "You usually write 1-2 files. Now you wrote 50 in 10 seconds — that's suspicious!" |
+| **dmesg** | Shows the kernel's message log. Like a black box recorder. |
+| **Circular buffer** | A fixed-size list where new entries overwrite old ones. Never grows. |
+| **Sliding window** | "Look at the last N seconds." The window slides forward with time. |
+| **Anomaly detection** | Spotting unusual patterns: "You usually write 1-2 files. Now you wrote 50 in 10 seconds!" |
 | **DLP** | Data Loss Prevention — stopping sensitive data from leaving the organisation. |
-| **PID** | Process ID — a number that uniquely identifies a running program. |
-| **make** | A build tool that compiles your code according to rules in a `Makefile`. |
-| **Kbuild** | The Linux kernel's custom build system. Used in `src_kernel/Makefile`. |
+| **PID** | Process ID — a number identifying a running program. |
+| **Monotonic time** | A clock that only moves forward, never jumps. Immune to system clock changes. |
+| **Atomic context** | A special kernel mode where you can't sleep. Requires trylock instead of regular lock. |
+| **make** | A build tool. Compiles code according to rules in a `Makefile`. |
+| **Kbuild** | The Linux kernel's build system. Used in `src_kernel/Makefile`. |
 
 ---
 
-## 🎯 Quick Reference Card
+## Quick Reference Card
 
 ```bash
 # Build
@@ -398,6 +431,9 @@ sudo insmod src_kernel/usb_audit.ko
 
 # Run monitor
 sudo ./src_user/usb_monitor --interactive
+
+# Run all automated tests
+sudo ./scripts/test_all.sh
 
 # Check kernel logs
 dmesg | grep usb_audit
@@ -410,27 +446,33 @@ make clean
 
 # One-click everything
 sudo ./scripts/run.sh
+
+# Generate report
+python3 scripts/generate_report.py
 ```
 
 ---
 
-## ❓ FAQ
+## FAQ
 
-**Q: Why do I need `sudo` for everything?**
-A: Loading kernel modules and accessing `/dev` devices requires root (administrator) privileges. This is a security feature — you don't want random apps injecting code into the kernel.
+**Q: Why do I need `sudo`?**
+A: Loading kernel modules and accessing `/dev` requires root privileges. Security feature — prevents random apps from injecting code into the kernel.
 
-**Q: What's the difference between the C app and the Python app?**
-A: The C app talks directly to our kernel module via ioctl. The Python app watches the filesystem independently using the `watchdog` library. They're two different approaches to the same goal.
+**Q: What's the difference between the C app and Python app?**
+A: The C app talks directly to our kernel module via ioctl (dashboard). The Python app watches the filesystem independently using watchdog (background monitor). They work together.
+
+**Q: What's a kprobe and why is it a big deal?**
+A: A kprobe lets our driver hook into the kernel's own file-writing function. This means file writes are detected **automatically** — no app needs to report them. Our driver just knows.
 
 **Q: Does this work on Windows/Mac?**
-A: No. Kernel modules are Linux-specific. Windows and macOS have completely different driver architectures. This project targets the Raspberry Pi 4 running Linux.
-
-**Q: What if I don't have a Raspberry Pi?**
-A: You can compile and test on any Linux machine (Ubuntu, Debian, etc.) as long as you have the kernel headers installed. The USB notifier won't detect real USB devices on a VM, but the character device and anomaly detection will work fine.
+A: No. Kernel modules are Linux-specific. This targets the Raspberry Pi 4 running Linux.
 
 **Q: Can I change the alert threshold without recompiling?**
-A: Yes! Use the `T` command in interactive mode, or the `-t` / `-w` CLI flags, or the `USB_AUDIT_SET_ANOMALY` ioctl directly from your own code.
+A: Yes! Use `T 3 2000` in the monitor, or `-t 3 -w 2000` flags, or the SET_ANOMALY ioctl from any program.
+
+**Q: What bugs did you fix during development?**
+A: Several. A naming clash with the kernel's own `enable_kprobe()` function (renamed to `enable_vfs_kprobe`). A null-termination typo in the mount path. Inconsistent timestamps between the atomic and regular logging paths (both now use monotonic time). Missing FILE_DELETE tracking in the atomic path. An ioctl structure too large for the kernel's size field (worked around with a placeholder type).
 
 ---
 
-*Still confused? That's OK — this is 3rd-year university material. Read through the code comments (they're very detailed), run the system, play with it, and things will click. Learning OS concepts takes time and hands-on experimentation.* 🧪
+*Still confused? That's OK — this is university-level OS material. Read through the code comments, run the system, play with it. Learning OS concepts takes hands-on experimentation.* 🧪
