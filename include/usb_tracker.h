@@ -34,8 +34,12 @@
 /* Set the USB mount-point path the driver should monitor. */
 #define USB_AUDIT_SET_PATH       _IOW(USB_AUDIT_MAGIC, 3, char[256])
 
-/* Retrieve the N most recent log entries (fills caller-supplied buffer). */
-#define USB_AUDIT_GET_LOGS       _IOWR(USB_AUDIT_MAGIC, 4, usb_audit_logs_t)
+/* Retrieve the N most recent log entries (fills caller-supplied buffer).
+ * NOTE: usb_audit_logs_t is ~35 KB, which exceeds the kernel's 14-bit
+ * ioctl size field (max 16 383).  We use __u32 as a placeholder type
+ * for the ioctl command encoding — the kernel handler still transfers
+ * the full usb_audit_logs_t struct. */
+#define USB_AUDIT_GET_LOGS       _IOWR(USB_AUDIT_MAGIC, 4, __u32)
 
 /* Reset all statistics counters to zero (logs are preserved). */
 #define USB_AUDIT_RESET_STATS    _IO(USB_AUDIT_MAGIC, 5)

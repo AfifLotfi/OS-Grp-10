@@ -89,11 +89,17 @@ static ktime_t  anomaly_last_alert;       /* timestamp of last alert raised  */
 /* Kprobe registration flag — true when vfs_write kretprobe is active. */
 static bool kprobe_registered = false;
 
-/* Module parameter: disable kprobe at load time if needed. */
-static bool enable_kprobe = true;
-module_param(enable_kprobe, bool, 0644);
-MODULE_PARM_DESC(enable_kprobe,
+/* Module parameter: disable kprobe at load time if needed.
+ * Renamed from "enable_kprobe" to avoid clash with the kernel's own
+ * enable_kprobe() function declared in <linux/kprobes.h>. */
+static bool enable_vfs_kprobe = true;
+module_param(enable_vfs_kprobe, bool, 0644);
+MODULE_PARM_DESC(enable_vfs_kprobe,
                  "Enable kretprobe on vfs_write for kernel-level file monitoring");
+
+/* Forward declaration — anomaly_check_burst is defined later in the file
+ * but is called from audit_log_event_atomic (kprobe context). */
+static void anomaly_check_burst(ktime_t now);
 
 /* =========================================================================
  * Atomic Logging Helper (safe for kprobe / atomic context)
@@ -116,7 +122,7 @@ static void audit_log_event_atomic(enum usb_audit_event_type type,
         return;   /* contended — safe to skip this event */
 
     entry = &log_buffer[log_head];
-    now = ktime_get_real_ns();
+    now = ktime_get_ns();
     entry->event_type   = (__u8)type;
     entry->pid          = pid;
     entry->timestamp_ns = now;
@@ -143,6 +149,9 @@ static void audit_log_event_atomic(enum usb_audit_event_type type,
         stats.total_files_modified++;
         stats.total_bytes_written += size;
         anomaly_check_burst(now);
+        break;
+    case USB_AUDIT_EVENT_FILE_DELETE:
+        stats.total_files_deleted++;
         break;
     default:
         break;
@@ -870,7 +879,7 @@ static int __init usb_audit_init(void)
     printk(KERN_INFO "[usb_audit] USB hotplug notifier registered\n");
 
     /* -- 7. Register kretprobe on vfs_write (kernel-level monitoring) - */
-    if (enable_kprobe) {
+    if (enable_vfs_kprobe) {
         krp_vfs_write.kp.symbol_name = "vfs_write";
         ret = register_kretprobe(&krp_vfs_write);
         if (ret < 0) {

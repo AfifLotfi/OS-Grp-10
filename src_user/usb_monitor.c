@@ -462,7 +462,7 @@ int main(int argc, char *argv[])
         } else if ((strcmp(argv[i], "-p") == 0 ||
                     strcmp(argv[i], "--path") == 0) && i + 1 < argc) {
             strncpy(mount_path, argv[++i], USB_AUDIT_PATH_LEN - 1);
-            mount_path[USB_AUDIT_PATH_LEN - 1] = '\\0';
+            mount_path[USB_AUDIT_PATH_LEN - 1] = '\0';
         } else if ((strcmp(argv[i], "-t") == 0 ||
                     strcmp(argv[i], "--threshold") == 0) && i + 1 < argc) {
             anomaly_thr = atoi(argv[++i]);
