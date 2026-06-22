@@ -564,9 +564,10 @@ def build_document():
         "status and displays any active SECURITY ALERT banners."
     )
     d.para(
-        "Bug fix: the mount path string was not properly null-terminated due to a typo "
-        "('\\0' instead of '\0'). This was corrected, ensuring the path is always a valid "
-        "C string regardless of input length."
+        "Bug fix: the mount path string was not properly null-terminated. The original "
+        "code accidentally used a multi-character literal (backslash-zero in quotes) "
+        "instead of the proper null character escape. This was corrected so the path "
+        "is always a valid C string regardless of input length."
     )
 
     d.h2("5.3 Daemon Mode")
