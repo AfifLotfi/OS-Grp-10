@@ -211,12 +211,12 @@ static void print_stats(int fd)
 }
 
 /* -------------------------------------------------------------------------
- * Subroutine: Fetch and print recent log entries
+ * Subroutine: Fetch and print recent log entries (latest first)
  * ------------------------------------------------------------------------- */
 static void print_logs(int fd, int max_display)
 {
     usb_audit_logs_t logs;
-    int i;
+    int i, start_idx;
 
     memset(&logs, 0, sizeof(logs));
     logs.count = (__u32)max_display;
@@ -231,14 +231,38 @@ static void print_logs(int fd, int max_display)
         return;
     }
 
-    printf("\n┌── Recent Transfer Log (last %u entries) "
-           "────────────────────┐\n", logs.count);
+    /* The kernel returns entries in chronological order (oldest first).
+     * To show latest first, we need to know the total entries.
+     * We'll get the total count from stats and adjust our display. */
+    
+    usb_audit_stats_t st;
+    if (ioctl(fd, USB_AUDIT_GET_STATS, &st) < 0) {
+        /* Fallback: just display what we got in reverse order */
+        printf("\n  Warning: Cannot determine total log count. Displaying oldest first.\n");
+        start_idx = 0;
+    } else {
+        /* Calculate where to start reading from the end */
+        int total = (int)st.log_count;
+        int requested = (int)logs.count;
+        
+        if (total <= requested) {
+            /* We have fewer logs than requested - show all */
+            start_idx = 0;
+        } else {
+            /* Skip the oldest entries and show only the newest */
+            start_idx = total - requested;
+        }
+    }
+
+    printf("\n┌── Recent Transfer Log (latest %u entries) "
+           "─────────────────────┐\n", logs.count);
     printf("│ %-12s %-8s %-12s %s\n",
            "TIME", "TYPE", "PID", "FILE / DEVICE");
     printf("│ %-12s %-8s %-12s %s\n",
            "────", "────", "───", "─────────────");
 
-    for (i = 0; i < (int)logs.count; i++) {
+    /* Display in reverse order (newest first) */
+    for (i = (int)logs.count - 1; i >= 0; i--) {
         usb_audit_log_entry_t *e = &logs.entries[i];
         printf("│ %-12s %-8s %-12u %.60s\n",
                format_time(e->timestamp_ns),
